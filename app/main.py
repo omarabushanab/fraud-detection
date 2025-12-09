@@ -271,10 +271,9 @@ html_content = """
                     body: formData
                 });
                 
-                const data = await response.json();
                 
-                document.getElementById('responseText').textContent = data.response;
-                document.getElementById('responseArea').style.display = 'block';
+                // Clear the textarea after successful submission
+                document.getElementById('message').value = '';
                 
             } catch (error) {
                 document.getElementById('responseText').textContent = 'Error sending message';
@@ -282,14 +281,13 @@ html_content = """
             }
         });
     </script>
-    </div>
 </body>
 </html>
 """
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
-    return html_content.replace("{% if response %}", "").replace("{% endif %}", "").replace("{{ response }}", "")
+    return html_content
 
 @app.post("/api/message")
 async def api_submit_message(message: str = Form(...)):
