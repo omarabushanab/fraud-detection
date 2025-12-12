@@ -292,6 +292,7 @@ async def home(request: Request):
 @app.post("/api/message")
 async def api_submit_message(message: str = Form(...)):
     # JSON API endpoint
+    print(f"Received message: {message}")
     return {"status": "success", "message": message, "response": f"Processed: {message}"}
 
 if __name__ == "__main__":
