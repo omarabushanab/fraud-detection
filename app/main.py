@@ -11,7 +11,7 @@ html_content = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Message Portal</title>
+    <title>Fraud Detection AI</title>
     <style>
         * {
             margin: 0;
@@ -20,9 +20,9 @@ html_content = """
         }
         
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             min-height: 100vh;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: #0a0e27;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -31,228 +31,417 @@ html_content = """
             overflow: hidden;
         }
         
+        /* Animated gradient background */
         body::before {
             content: '';
             position: absolute;
             width: 200%;
             height: 200%;
-            background: radial-gradient(circle at 50% 50%, rgba(255,255,255,0.1) 0%, transparent 50%);
-            animation: rotate 20s linear infinite;
+            background: radial-gradient(circle at 20% 50%, rgba(120, 119, 198, 0.3) 0%, transparent 50%),
+                        radial-gradient(circle at 80% 80%, rgba(74, 144, 226, 0.3) 0%, transparent 50%),
+                        radial-gradient(circle at 40% 20%, rgba(138, 43, 226, 0.2) 0%, transparent 50%);
+            animation: gradientShift 15s ease infinite;
         }
         
-        @keyframes rotate {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
+        @keyframes gradientShift {
+            0%, 100% { transform: translate(0, 0) rotate(0deg); }
+            33% { transform: translate(-5%, -5%) rotate(120deg); }
+            66% { transform: translate(5%, 5%) rotate(240deg); }
         }
         
-        .container {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            padding: 50px 40px;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            max-width: 600px;
-            width: 100%;
-            position: relative;
-            z-index: 1;
-            animation: slideUp 0.6s ease-out;
-        }
-        
-        @keyframes slideUp {
-            from {
-                opacity: 0;
-                transform: translateY(30px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-        
-        h1 {
-            color: #333;
-            margin-bottom: 10px;
-            font-size: 32px;
-            font-weight: 700;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-        
-        .subtitle {
-            color: #666;
-            margin-bottom: 35px;
-            font-size: 14px;
-        }
-        
-        .form-group {
-            margin-bottom: 25px;
-        }
-        
-        label {
-            display: block;
-            margin-bottom: 10px;
-            color: #444;
-            font-weight: 600;
-            font-size: 14px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        textarea {
-            width: 100%;
-            padding: 15px;
-            border: 2px solid #e0e0e0;
-            border-radius: 12px;
-            font-size: 16px;
-            font-family: inherit;
-            min-height: 150px;
-            resize: vertical;
-            transition: all 0.3s ease;
-            background: #fafafa;
-        }
-        
-        textarea:focus {
-            outline: none;
-            border-color: #667eea;
-            background: white;
-            box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
-        }
-        
-        textarea::placeholder {
-            color: #aaa;
-        }
-        
-        button {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 16px 40px;
-            border: none;
-            border-radius: 12px;
-            cursor: pointer;
-            font-size: 16px;
-            font-weight: 600;
-            width: 100%;
-            transition: all 0.3s ease;
-            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-        
-        button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 25px rgba(102, 126, 234, 0.6);
-        }
-        
-        button:active {
-            transform: translateY(0);
-        }
-        
-        .response {
-            margin-top: 30px;
-            padding: 20px;
-            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-            border-radius: 12px;
-            animation: fadeIn 0.5s ease-out;
-            border-left: 4px solid #667eea;
-        }
-        
-        @keyframes fadeIn {
-            from {
-                opacity: 0;
-                transform: translateY(10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-        
-        .response strong {
-            color: #667eea;
-            display: block;
-            margin-bottom: 8px;
-            font-size: 14px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        .response-text {
-            color: #333;
-            font-size: 16px;
-            line-height: 1.6;
-        }
-        
-        .floating-shapes {
+        /* Particle system */
+        .particles {
             position: absolute;
             width: 100%;
             height: 100%;
             overflow: hidden;
-            z-index: 0;
         }
         
-        .shape {
+        .particle {
             position: absolute;
-            background: rgba(255, 255, 255, 0.1);
+            width: 3px;
+            height: 3px;
+            background: rgba(138, 180, 248, 0.6);
             border-radius: 50%;
+            animation: particleFloat 20s linear infinite;
         }
         
-        .shape1 {
-            width: 80px;
-            height: 80px;
-            top: 10%;
-            left: 10%;
-            animation: float 6s ease-in-out infinite;
+        @keyframes particleFloat {
+            0% {
+                transform: translateY(100vh) translateX(0) scale(0);
+                opacity: 0;
+            }
+            10% {
+                opacity: 1;
+            }
+            90% {
+                opacity: 1;
+            }
+            100% {
+                transform: translateY(-100vh) translateX(100px) scale(1);
+                opacity: 0;
+            }
         }
         
-        .shape2 {
-            width: 60px;
-            height: 60px;
-            top: 60%;
-            right: 10%;
-            animation: float 8s ease-in-out infinite reverse;
+        /* Grid overlay */
+        .grid-overlay {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background-image: 
+                linear-gradient(rgba(138, 180, 248, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(138, 180, 248, 0.03) 1px, transparent 1px);
+            background-size: 50px 50px;
+            animation: gridMove 20s linear infinite;
         }
         
-        .shape3 {
+        @keyframes gridMove {
+            0% { transform: translate(0, 0); }
+            100% { transform: translate(50px, 50px); }
+        }
+        
+        .container {
+            background: rgba(15, 23, 42, 0.7);
+            backdrop-filter: blur(20px) saturate(180%);
+            padding: 60px 50px;
+            border-radius: 32px;
+            box-shadow: 
+                0 0 80px rgba(138, 180, 248, 0.1),
+                0 0 40px rgba(74, 144, 226, 0.1),
+                inset 0 0 60px rgba(138, 180, 248, 0.02);
+            max-width: 700px;
+            width: 100%;
+            position: relative;
+            z-index: 1;
+            animation: containerAppear 1s cubic-bezier(0.16, 1, 0.3, 1);
+            border: 1px solid rgba(138, 180, 248, 0.1);
+        }
+        
+        @keyframes containerAppear {
+            from {
+                opacity: 0;
+                transform: translateY(40px) scale(0.95);
+                filter: blur(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+                filter: blur(0);
+            }
+        }
+        
+        /* Glowing corner accents */
+        .container::before,
+        .container::after {
+            content: '';
+            position: absolute;
             width: 100px;
             height: 100px;
-            bottom: 10%;
-            left: 20%;
-            animation: float 7s ease-in-out infinite;
+            border: 2px solid;
+            border-radius: 16px;
+            animation: glowPulse 3s ease-in-out infinite;
         }
         
-        @keyframes float {
-            0%, 100% {
-                transform: translateY(0) rotate(0deg);
-            }
-            50% {
-                transform: translateY(-20px) rotate(180deg);
-            }
+        .container::before {
+            top: -2px;
+            left: -2px;
+            border-color: transparent transparent rgba(138, 180, 248, 0.3) rgba(138, 180, 248, 0.3);
+        }
+        
+        .container::after {
+            bottom: -2px;
+            right: -2px;
+            border-color: rgba(74, 144, 226, 0.3) rgba(74, 144, 226, 0.3) transparent transparent;
+            animation-delay: 1.5s;
+        }
+        
+        @keyframes glowPulse {
+            0%, 100% { opacity: 0.3; filter: blur(0); }
+            50% { opacity: 0.8; filter: blur(4px); }
+        }
+        
+        .header-section {
+            text-align: center;
+            margin-bottom: 45px;
+            position: relative;
+        }
+        
+        .icon-shield {
+            font-size: 64px;
+            margin-bottom: 20px;
+            display: inline-block;
+            animation: shieldFloat 3s ease-in-out infinite;
+            filter: drop-shadow(0 0 20px rgba(138, 180, 248, 0.5));
+        }
+        
+        @keyframes shieldFloat {
+            0%, 100% { transform: translateY(0) rotate(0deg); }
+            50% { transform: translateY(-10px) rotate(5deg); }
+        }
+        
+        h1 {
+            color: #fff;
+            margin-bottom: 12px;
+            font-size: 42px;
+            font-weight: 800;
+            background: linear-gradient(135deg, #8AB4F8 0%, #4A90E2 50%, #7B68EE 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: -0.5px;
+            animation: titleShine 3s ease-in-out infinite;
+            text-shadow: 0 0 30px rgba(138, 180, 248, 0.3);
+        }
+        
+        @keyframes titleShine {
+            0%, 100% { filter: brightness(1); }
+            50% { filter: brightness(1.2); }
+        }
+        
+        .subtitle {
+            color: rgba(138, 180, 248, 0.7);
+            font-size: 15px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+        }
+        
+        .form-group {
+            margin-bottom: 30px;
+            position: relative;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 12px;
+            color: rgba(255, 255, 255, 0.9);
+            font-weight: 600;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+        }
+        
+        textarea {
+            width: 100%;
+            padding: 20px;
+            border: 2px solid rgba(138, 180, 248, 0.2);
+            border-radius: 16px;
+            font-size: 16px;
+            font-family: 'SF Mono', 'Monaco', 'Courier New', monospace;
+            min-height: 180px;
+            resize: vertical;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            background: rgba(15, 23, 42, 0.5);
+            color: #fff;
+            box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        
+        textarea:focus {
+            outline: none;
+            border-color: rgba(138, 180, 248, 0.6);
+            background: rgba(15, 23, 42, 0.8);
+            box-shadow: 
+                inset 0 2px 10px rgba(0, 0, 0, 0.3),
+                0 0 0 4px rgba(138, 180, 248, 0.1),
+                0 0 30px rgba(138, 180, 248, 0.2);
+            transform: translateY(-2px);
+        }
+        
+        textarea::placeholder {
+            color: rgba(138, 180, 248, 0.3);
+        }
+        
+        button {
+            background: linear-gradient(135deg, #8AB4F8 0%, #4A90E2 50%, #7B68EE 100%);
+            color: white;
+            padding: 18px 40px;
+            border: none;
+            border-radius: 16px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 700;
+            width: 100%;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 
+                0 10px 30px rgba(138, 180, 248, 0.3),
+                0 0 0 0 rgba(138, 180, 248, 0.5);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        button::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s, height 0.6s;
+        }
+        
+        button:hover::before {
+            width: 300px;
+            height: 300px;
+        }
+        
+        button:hover {
+            transform: translateY(-3px) scale(1.02);
+            box-shadow: 
+                0 15px 40px rgba(138, 180, 248, 0.4),
+                0 0 60px rgba(138, 180, 248, 0.3);
+        }
+        
+        button:active {
+            transform: translateY(-1px) scale(0.98);
+        }
+        
+        button span {
+            position: relative;
+            z-index: 1;
+        }
+        
+        /* Loading spinner */
+        .spinner {
+            display: none;
+            width: 24px;
+            height: 24px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .loading .spinner {
+            display: block;
+        }
+        
+        .loading span {
+            display: none;
+        }
+        
+        /* Status indicators */
+        .status-bar {
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+            margin-top: 25px;
+            opacity: 0.6;
+        }
+        
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: rgba(138, 180, 248, 0.3);
+            animation: statusPulse 2s ease-in-out infinite;
+        }
+        
+        .status-dot:nth-child(2) { animation-delay: 0.2s; }
+        .status-dot:nth-child(3) { animation-delay: 0.4s; }
+        
+        @keyframes statusPulse {
+            0%, 100% { transform: scale(1); opacity: 0.3; }
+            50% { transform: scale(1.2); opacity: 1; }
+        }
+        
+        /* Tech decorations */
+        .scan-line {
+            position: absolute;
+            width: 100%;
+            height: 2px;
+            background: linear-gradient(90deg, 
+                transparent 0%, 
+                rgba(138, 180, 248, 0.5) 50%, 
+                transparent 100%);
+            animation: scan 3s ease-in-out infinite;
+            pointer-events: none;
+        }
+        
+        @keyframes scan {
+            0%, 100% { top: 0%; opacity: 0; }
+            50% { top: 100%; opacity: 1; }
+        }
+
+        /* Holographic effect */
+        .container::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(
+                45deg,
+                transparent 30%,
+                rgba(138, 180, 248, 0.03) 50%,
+                transparent 70%
+            );
+            pointer-events: none;
+            animation: hologram 3s linear infinite;
+        }
+        
+        @keyframes hologram {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
         }
     </style>
 </head>
 <body>
-    <div class="floating-shapes">
-        <div class="shape shape1"></div>
-        <div class="shape shape2"></div>
-        <div class="shape shape3"></div>
+    <!-- Particles -->
+    <div class="particles">
+        <div class="particle" style="left: 10%; animation-delay: 0s;"></div>
+        <div class="particle" style="left: 20%; animation-delay: 2s;"></div>
+        <div class="particle" style="left: 30%; animation-delay: 4s;"></div>
+        <div class="particle" style="left: 40%; animation-delay: 1s;"></div>
+        <div class="particle" style="left: 50%; animation-delay: 3s;"></div>
+        <div class="particle" style="left: 60%; animation-delay: 5s;"></div>
+        <div class="particle" style="left: 70%; animation-delay: 2s;"></div>
+        <div class="particle" style="left: 80%; animation-delay: 4s;"></div>
+        <div class="particle" style="left: 90%; animation-delay: 1s;"></div>
     </div>
     
+    <!-- Grid overlay -->
+    <div class="grid-overlay"></div>
+    
     <div class="container">
-        <h1>✨ Fraud Detection</h1>
+        <div class="scan-line"></div>
+        
+        <div class="header-section">
+            <div class="icon-shield">🛡️</div>
+            <h1>FRAUD DETECTION AI</h1>
+            <p class="subtitle">Advanced Neural Network Analysis</p>
+        </div>
         
         <form id="messageForm">
             <div class="form-group">
+                <label>ANALYZE MESSAGE</label>
                 <textarea 
                     id="message" 
                     name="message" 
-                    placeholder="Put your message here..." 
+                    placeholder="Paste suspicious message for AI-powered fraud detection..." 
                     required
                 ></textarea>
             </div>
-            <button type="submit">Check Message for Fraud</button>
+            <button type="submit" id="submitBtn">
+                <span>INITIATE SCAN</span>
+                <div class="spinner"></div>
+            </button>
         </form>
+        
+        <div class="status-bar">
+            <div class="status-dot"></div>
+            <div class="status-dot"></div>
+            <div class="status-dot"></div>
+        </div>
     </div>
     
     <script>
@@ -260,10 +449,14 @@ html_content = """
             e.preventDefault();
             
             const message = document.getElementById('message').value;
+            const submitBtn = document.getElementById('submitBtn');
             const formData = new FormData();
             formData.append('message', message);
 
             console.log(message);
+            
+            // Add loading state
+            submitBtn.classList.add('loading');
             
             try {
                 const response = await fetch('/api/message', {
@@ -271,13 +464,30 @@ html_content = """
                     body: formData
                 });
                 
-                
-                // Clear the textarea after successful submission
-                document.getElementById('message').value = '';
+                // Simulate processing time for effect
+                setTimeout(() => {
+                    submitBtn.classList.remove('loading');
+                    document.getElementById('message').value = '';
+                    
+                    // Visual feedback
+                    submitBtn.style.background = 'linear-gradient(135deg, #10b981 0%, #059669 100%)';
+                    submitBtn.querySelector('span').textContent = 'SCAN COMPLETE ✓';
+                    
+                    setTimeout(() => {
+                        submitBtn.style.background = '';
+                        submitBtn.querySelector('span').textContent = 'INITIATE SCAN';
+                    }, 2000);
+                }, 1500);
                 
             } catch (error) {
-                document.getElementById('responseText').textContent = 'Error sending message';
-                document.getElementById('responseArea').style.display = 'block';
+                submitBtn.classList.remove('loading');
+                submitBtn.style.background = 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)';
+                submitBtn.querySelector('span').textContent = 'ERROR ✗';
+                
+                setTimeout(() => {
+                    submitBtn.style.background = '';
+                    submitBtn.querySelector('span').textContent = 'INITIATE SCAN';
+                }, 2000);
             }
         });
     </script>
@@ -292,7 +502,10 @@ async def home(request: Request):
 @app.post("/api/message")
 async def api_submit_message(message: str = Form(...)):
     # JSON API endpoint
+    print(f"Received message: {message}")
     return {"status": "success", "message": message, "response": f"Processed: {message}"}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# comment
