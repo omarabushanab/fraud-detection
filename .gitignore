@@ -210,3 +210,5 @@ __marimo__/
 # Google OAuth credentials and tokens
 credentials.json
 token.pickle
+
+/datasets
