@@ -1,3 +1,4 @@
+from UI_to_model import classify_text
 from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -503,6 +504,8 @@ async def home(request: Request):
 async def api_submit_message(message: str = Form(...)):
     # JSON API endpoint
     print(f"Received message: {message}")
+    label, confidence = classify_text(message)
+    print(f"label: {label} , confidence: {confidence}" )
     return {"status": "success", "message": message, "response": f"Processed: {message}"}
 
 if __name__ == "__main__":
