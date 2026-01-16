@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  # Your XLM-R Model Service
+  xlmr-service:
+    build: ./xlmr_service
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # The Orchestrator (The Manager)
+  orchestrator:
+    build: ./orchestrator
+    ports:
+      - "8001:8000"
+    environment:
+      - XLMR_SERVICE_URL=http://xlmr-service:8000
+    depends_on:
+      xlmr-service:
+        condition: service_healthy
+
+  # Redis for Caching (Mentioned in your requirements)
+  cache:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
