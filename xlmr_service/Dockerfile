@@ -1,23 +1,34 @@
-# Stage 1: Downloader
+# Stage 1: Model Downloader 
 FROM python:3.10-slim AS loader
 WORKDIR /loader
-RUN pip install gdown
-COPY download_model.py .
-# This runs and leaves the /loader/model folder ready
-RUN python download_model.py 
+COPY download_model.py ./
+RUN pip install --no-cache-dir gdown requests && python download_model.py
 
-# Stage 2: Final Runtime
+# ... (Stage 1 remains same)
+
+# Stage 2: runtime image
 FROM python:3.10-slim
 WORKDIR /app
 
-# Install only what's needed for the API
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
-COPY requirements.txt .
+# Install system dependencies (needed for PyTorch/Transformers)
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt ./
+# Ensure sacremoses is in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the model from the loader stage
-COPY --from=loader /loader/model ./model
-COPY ./app ./app
+# Copy model weights
+COPY --from=loader /loader/model /app/model
+
+# Copy application code
+COPY ./app /app/app
+
+# Point the MODEL_DIR environment variable to the nested folder
+ENV PORT=8000 \
+    MODEL_DIR=/app/model/xlm-r-phishing-final \
+    PYTHONPATH=/app \
+    HF_HUB_DISABLE_SYMLINKS_WARNING=1
 
 EXPOSE 8000
+
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

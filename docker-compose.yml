@@ -1,9 +1,10 @@
 version: '3.8'
 
 services:
-  # Your XLM-R Model Service
-  xlmr-service:
+  # The ML Classification Component
+  classifier-api:
     build: ./xlmr_service
+    image: phishing-classifier:v1
     ports:
       - "8000:8000"
     healthcheck:
@@ -12,19 +13,13 @@ services:
       timeout: 10s
       retries: 3
 
-  # The Orchestrator (The Manager)
+  # The main logic that connects to Gmail and handles preprocessing
   orchestrator:
     build: ./orchestrator
-    ports:
-      - "8001:8000"
-    environment:
-      - XLMR_SERVICE_URL=http://xlmr-service:8000
     depends_on:
-      xlmr-service:
-        condition: service_healthy
-
-  # Redis for Caching (Mentioned in your requirements)
-  cache:
-    image: redis:alpine
-    ports:
-      - "6379:6379"
+      classifier-api:
+        condition: service_healthy # Only starts orchestrator once the model is loaded
+    environment:
+      - CLASSIFIER_URL=http://classifier-api:8000/predict
+    volumes:
+      - ./orchestrator/token.pickle:/app/token.pickle
