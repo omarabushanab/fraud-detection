@@ -1,7 +1,11 @@
-fastapi
-uvicorn
-torch
-transformers
-sentencepiece
-protobuf
-gdown
+fastapi==0.110.0
+uvicorn[standard]==0.27.1
+# CPU wheel to keep image small; adjust if you need CUDA
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.2+cpu
+transformers==4.38.2
+sentencepiece==0.1.99
+protobuf==4.25.3
+gdown==5.1.0
+requests==2.31.0
+sacremoses==0.1.1
