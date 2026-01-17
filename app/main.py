@@ -7,6 +7,8 @@ import uvicorn
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 import torch.nn.functional as F
+from pydantic import BaseModel
+
 
 app = FastAPI()
 
@@ -18,6 +20,8 @@ model_path = r"G:\.shortcut-targets-by-id\1x507Fs2GpRNcZXoBsd7NiSFQv_6mQ200\xlm-
 #     .parents[1]          # fraud-detection/
 #     / "xlm-r-phishing-final"
 # )
+class EmailRequest(BaseModel):
+    email: str
 
 model_path = str(model_path)
 tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
@@ -768,6 +772,16 @@ async def api_submit_message(message: str = Form(...)):
         "confidence": confidence,
         "message": message
     })
+
+@app.post("/api/classify-email")
+async def classify_email(request: EmailRequest):
+    label, confidence = classify_text(request.email)
+
+    return {
+        "email": request.email,
+        "verdict": label,
+        "confidence_percentage": round(confidence * 100, 2)
+    }
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

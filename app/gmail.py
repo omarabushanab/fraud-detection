@@ -33,6 +33,7 @@ app = FastAPI()
 # ======================
 # GMAIL AUTH (OAuth)
 # ======================
+
 def get_gmail_service():
     creds = None
 
@@ -109,66 +110,85 @@ def classify_text(text):
 # ======================
 # PUSH ENDPOINT
 # ======================
+from googleapiclient.errors import HttpError
+
 @app.post("/gmail/push")
 async def gmail_push(request: Request):
     envelope = await request.json()
-
     if "message" not in envelope:
         return {"status": "ignored"}
 
+    # 1. Decode historyId from the notification
     data = json.loads(base64.b64decode(envelope["message"]["data"]).decode())
-    history_id = data["historyId"]
-
-    print(f"🔔 Push notification received (historyId={history_id})")
-
+    current_history_id = data["historyId"]
+    print(f"🔔 Push notification received (historyId={current_history_id})")
 
     service = get_gmail_service()
-
     malicious_label_id = get_or_create_malicious_label(service)
-
 
     global LAST_HISTORY_ID
 
+    # 2. Handle first run
     if LAST_HISTORY_ID is None:
-        LAST_HISTORY_ID = history_id
-        print("ℹ️ History baseline set, waiting for next email")
+        LAST_HISTORY_ID = current_history_id
+        print("ℹ️ History baseline set.")
         return {"status": "baseline set"}
 
-    history = service.users().history().list(
-        userId="me",
-        startHistoryId=LAST_HISTORY_ID,
-        historyTypes=["messageAdded"]
-    ).execute()
+    try:
+        # 3. Fetch history since the last known ID
+        history_response = service.users().history().list(
+            userId="me",
+            startHistoryId=LAST_HISTORY_ID,
+            historyTypes=["messageAdded"]
+        ).execute()
 
-    LAST_HISTORY_ID = history_id
+        # Update baseline for next time
+        LAST_HISTORY_ID = current_history_id
 
-    for h in history.get("history", []):
-        for msg in h.get("messagesAdded", []):
-            msg_id = msg["message"]["id"]
+        # 4. Process only if there are new messages
+        if "history" in history_response:
+            for h in history_response["history"]:
+                # Check for messages added to Inbox
+                for added in h.get("messagesAdded", []):
+                    msg_id = added["message"]["id"]
+                    
+                    # Get full email content
+                    email = service.users().messages().get(
+                        userId="me", id=msg_id, format="full"
+                    ).execute()
+                    
+                    body_text = email.get('snippet', '')
+                    label, conf = classify_text(body_text)
 
-            email = service.users().messages().get(
-                userId="me",
-                id=msg_id,
-                format="full"
-            ).execute()
-            print(email['snippet'])
+                    print(f"\n📧 Email Snippet: {body_text[:50]}...")
+                    print(f"🧠 Verdict: {label} ({conf:.2%})")
 
+                    # 5. Take Action
+                    if label == "Malicious":
+                        # Add Malicious Label and Remove INBOX Label
+                        service.users().messages().modify(
+                            userId='me',
+                            id=msg_id,
+                            body={
+                                'addLabelIds': [malicious_label_id],
+                                'removeLabelIds': ['INBOX']
+                            }
+                        ).execute()
+                        print(f"🚨 ACTION: Moved message {msg_id} to Malicious folder.")
+                    else:
+                        print("✅ ACTION: Kept in Inbox.")
 
-            label, conf = classify_text(email['snippet'])
-
-            print("\n📧 New Email Received")
-            print(f"🧪 Verdict: {label} ({conf:.2%})")
-
-            if label == "Malicious":
-                move_to_malicious(service, msg_id, malicious_label_id)
-                print("🚨 Email moved to 'malicious' and removed from Inbox")
-
+    except HttpError as error:
+        if error.resp.status == 404:
+            print("⚠️ History ID expired. Resetting baseline...")
+            LAST_HISTORY_ID = current_history_id
+        else:
+            print(f"❌ API Error: {error}")
 
     return {"status": "ok"}
-
-
 # ======================
 # RUN SERVER
 # ======================
 if __name__ == "__main__":
+    get_gmail_service()
     uvicorn.run("gmail:app", host="0.0.0.0", port=8000)
