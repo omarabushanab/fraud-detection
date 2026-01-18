@@ -1,6 +1,6 @@
 import lightgbm as lgb
 import matplotlib.pyplot as plt
-from core.preprocessing.uri_data_preprocessing import build_disjoint_eval_csv, uri_data_preprocessing
+from core.preprocessing.uri_data_preprocessing import uri_data_preprocessing
 from lightgbm import LGBMClassifier
 import joblib
 from pathlib import Path
@@ -37,6 +37,6 @@ def train_model():
     Path("artifacts").mkdir(exist_ok=True)
 
     # Save model
-    joblib.dump(model, "core/models/uri_lgbm_model.joblib")
+    joblib.dump(model, "core/models/uri_lgbm_model_domain.joblib")
 
-    print("Model saved to core/models/uri_lgbm_model.joblib")
+    print("Model saved to core/models/uri_lgbm_model_domain.joblib")
