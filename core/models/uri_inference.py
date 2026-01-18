@@ -1,17 +1,17 @@
 import pandas as pd
-from core.preprocessing.uri_feature_extractor import extract_features
+from core.preprocessing.uri_feature_extractor import extract_features,extract_domain_features, canonicalize_domain
 import joblib
 
-MODEL_PATH = "core/models/uri_lgbm_model.joblib"
+MODEL_PATH = "core/models/uri_lgbm_model_domain.joblib"
 
 def load_model():
     return joblib.load(MODEL_PATH)
 
-def predict_url(url, threshold=0.5):
+def predict_url(url, threshold=0.72):
     model = load_model()
 
     # Extract features
-    features = extract_features(url)
+    features = extract_domain_features(canonicalize_domain(url))
     X = pd.DataFrame([features])
 
     prob = model.predict_proba(X)[0, 1]

@@ -50,3 +50,28 @@ def extract_features(url):
         features[f"has_{word}"] = int(word in url.lower())
 
     return features
+
+    
+def extract_domain_features(domain):
+    features = {
+        "domain_length": len(domain),
+        "num_dots": domain.count("."),
+        "num_hyphens": domain.count("-"),
+        "num_digits": sum(c.isdigit() for c in domain),
+        "digit_ratio": sum(c.isdigit() for c in domain) / max(len(domain), 1),
+        "has_ip": int(bool(IP_REGEX.match(domain))),
+        "entropy": shannon_entropy(domain),
+    }
+
+    for word in SUSPICIOUS_WORDS:
+        features[f"has_{word}"] = int(word in domain)
+
+    return features
+
+def canonicalize_domain(url):
+    try:
+        parsed = urlparse(url)
+        domain = parsed.hostname or ""
+        return domain.lower()
+    except:
+        return ""
