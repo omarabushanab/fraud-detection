@@ -24,11 +24,11 @@ COPY --from=loader /loader/model /app/model
 COPY ./app /app/app
 
 # Point the MODEL_DIR environment variable to the nested folder
-ENV PORT=8000 \
+ENV PORT=8001 \
     MODEL_DIR=/app/model/xlm-r-phishing-final \
     PYTHONPATH=/app \
     HF_HUB_DISABLE_SYMLINKS_WARNING=1
 
-EXPOSE 8000
+EXPOSE 8001
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001"]
