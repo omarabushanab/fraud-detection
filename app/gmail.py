@@ -2,7 +2,8 @@ import base64
 import json
 import os
 import pickle
-
+import fitz  # PyMuPDF
+import io
 from fastapi import FastAPI, Request
 import uvicorn
 
@@ -106,7 +107,81 @@ def classify_text(text):
 
     return label, confidence
 
+def get_attachment_text(service, msg_id, parts):
+    attachment_texts = []
+    for part in parts:
+        if part.get('filename'):  # This part is an attachment
+            attachment_id = part['body'].get('attachmentId')
+            if attachment_id:
+                # Fetch the actual attachment data
+                attachment = service.users().messages().attachments().get(
+                    userId='me', messageId=msg_id, id=attachment_id
+                ).execute()
+                
+                data = attachment.get('data')
+                if data:
+                    # Decode from base64url to string
+                    decoded_data = base64.urlsafe_b64decode(data).decode('utf-8', errors='ignore')
+                    attachment_texts.append(f"\n[Attachment: {part['filename']}]\n{decoded_data}")
+        
+        # Recursively check nested parts (common in multi-part emails)
+        if 'parts' in part:
+            attachment_texts.extend(get_attachment_text(service, msg_id, part['parts']))
+            
+    return " ".join(attachment_texts)
 
+def get_parts_content(service, msg_id, payload):
+    parts_to_classify = []
+    
+    # 1. Get the main body/snippet
+    snippet = payload.get('snippet', '')
+    if snippet:
+        parts_to_classify.append({"source": "Email Body", "content": snippet})
+
+    def walk_parts(parts):
+        for part in parts:
+            filename = part.get('filename')
+            if filename:
+                attachment_id = part['body'].get('attachmentId')
+                if attachment_id:
+                    attachment = service.users().messages().attachments().get(
+                        userId='me', messageId=msg_id, id=attachment_id
+                    ).execute()
+                    
+                    raw_data = base64.urlsafe_b64decode(attachment.get('data'))
+                    
+                    # --- PDF HANDLING ---
+                    if filename.lower().endswith('.pdf'):
+                        print(f"📄 Extracting text from PDF: {filename}")
+                        try:
+                            pdf_stream = io.BytesIO(raw_data)
+                            with fitz.open(stream=pdf_stream, filetype="pdf") as doc:
+                                text = ""
+                                for page in doc:
+                                    text += page.get_text()
+                            decoded_data = text
+                        except Exception as e:
+                            print(f"❌ PDF extraction failed: {e}")
+                            decoded_data = ""
+                    
+                    # --- TEXT/PLAIN HANDLING ---
+                    else:
+                        decoded_data = raw_data.decode('utf-8', errors='ignore')
+                    
+                    if decoded_data.strip():
+                        parts_to_classify.append({
+                            "source": f"Attachment: {filename}",
+                            "content": decoded_data
+                        })
+                        print(f"✅ Extracted content from {filename}")
+
+            if 'parts' in part:
+                walk_parts(part['parts'])
+
+    if 'parts' in payload:
+        walk_parts(payload['parts'])
+        
+    return parts_to_classify
 # ======================
 # PUSH ENDPOINT
 # ======================
@@ -150,33 +225,45 @@ async def gmail_push(request: Request):
             for h in history_response["history"]:
                 # Check for messages added to Inbox
                 for added in h.get("messagesAdded", []):
+                    # ... inside your 'for added in h.get("messagesAdded", [])' loop:
                     msg_id = added["message"]["id"]
-                    
-                    # Get full email content
+
+                    # Get full email content (required to see the 'payload' and 'parts')
                     email = service.users().messages().get(
                         userId="me", id=msg_id, format="full"
                     ).execute()
+
+                    is_malicious_found = False
+                    # Populate the list with Body + All Attachments individually
+                    all_contents = get_parts_content(service, msg_id, email['payload'])
+
+                    label, conf = classify_text(email['snippet'])
+                    print(f"⚖️ Verdict for Mail Body: {label} ({conf:.2%})")
                     
-                    body_text = email.get('snippet', '')
-                    label, conf = classify_text(body_text)
-
-                    print(f"\n📧 Email Snippet: {body_text[:50]}...")
-                    print(f"🧠 Verdict: {label} ({conf:.2%})")
-
-                    # 5. Take Action
                     if label == "Malicious":
-                        # Add Malicious Label and Remove INBOX Label
-                        service.users().messages().modify(
-                            userId='me',
-                            id=msg_id,
-                            body={
-                                'addLabelIds': [malicious_label_id],
-                                'removeLabelIds': ['INBOX']
-                            }
-                        ).execute()
-                        print(f"🚨 ACTION: Moved message {msg_id} to Malicious folder.")
+                        is_malicious_found = True
                     else:
-                        print("✅ ACTION: Kept in Inbox.")
+                        for item in all_contents:
+                            if not item["content"].strip():
+                                print(f"⚠️ {item['source']} is empty, skipping...")
+                                continue
+                                
+                            label, conf = classify_text(item["content"])
+                            print(f"⚖️ Verdict for {item['source']}: {label} ({conf:.2%})")
+
+                            if label == "Malicious":
+                                is_malicious_found = True
+                                break
+
+                    # Take Action
+                    if is_malicious_found:
+                        service.users().messages().modify(
+                            userId='me', id=msg_id,
+                            body={'addLabelIds': [malicious_label_id], 'removeLabelIds': ['INBOX']}
+                        ).execute()
+                        print(f"🚨 ACTION: Moved {msg_id} to Malicious folder.")
+                    else:
+                        print(f"✅ ACTION: All parts passed. Kept {msg_id} in Inbox.")
 
     except HttpError as error:
         if error.resp.status == 404:
