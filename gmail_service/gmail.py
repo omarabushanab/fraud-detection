@@ -7,6 +7,7 @@ import io
 from fastapi import FastAPI, Request
 import uvicorn
 
+
 import httpx
 import redis.asyncio as redis
 from google.oauth2.credentials import Credentials
@@ -193,6 +194,7 @@ def get_parts_content(service, msg_id, payload):
 @app.post("/gmail/push")
 async def gmail_push(request: Request):
     envelope = await request.json()
+
     email_address = envelope["message"]["attributes"].get("userEmail")
     # 1. Fetch user state from Redis
     user_data = await db.hgetall(f"user:{email_address}")
