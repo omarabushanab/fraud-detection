@@ -12,26 +12,37 @@ import httpx
 import redis.asyncio as redis
 from google.oauth2.credentials import Credentials
 
+from google.oauth2 import id_token
+from google.auth.transport import requests
+
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request as GRequest
 from googleapiclient.errors import HttpError
-
+from google_auth_oauthlib.flow import Flow
 
 
 # ======================
 # CONFIG
 # ======================
-SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
-MODEL_PATH = r"G:\.shortcut-targets-by-id\1x507Fs2GpRNcZXoBsd7NiSFQv_6mQ200\xlm-r-phishing-final"
-LAST_HISTORY_ID = None
 
+
+
+CLIENT_CONFIG = json.load(open("credentials.json"))
+
+# Updated to include identity scopes
+SCOPES = [
+    'https://www.googleapis.com/auth/gmail.modify',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'openid'
+]
 # ibrahim
 
 # ======================
 # FASTAPI APP
 # ======================
 app = FastAPI()
+
 
 
 # Configuration for Microservice Communication
@@ -43,27 +54,26 @@ db = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379"), decode_respons
 # GMAIL AUTH (OAuth)
 # ======================
 
-def get_gmail_service():
-    creds = None
+async def get_user_service(email_address: str):
+    # 1. Look for the user's token in Redis instead of a local file
+    token_json = await db.get(f"token:{email_address}")
+    
+    if not token_json:
+        # If no token exists, the user needs to log in via your UI first
+        print(f"❌ No credentials found in Redis for {email_address}")
+        return None
 
-    if os.path.exists("token.pickle"):
-        with open("token.pickle", "rb") as f:
-            creds = pickle.load(f)
+    # 2. Reconstruct the credentials from the stored JSON
+    creds_data = json.loads(token_json)
+    creds = Credentials.from_authorized_user_info(creds_data, SCOPES)
 
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(GRequest())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                "credentials.json", SCOPES
-            )
-            creds = flow.run_local_server(port=0)
-
-        with open("token.pickle", "wb") as f:
-            pickle.dump(creds, f)
+    # 3. Refresh the token if it has expired
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(GRequest())
+        # Update the refreshed token back in Redis
+        await db.set(f"token:{email_address}", creds.to_json())
 
     return build("gmail", "v1", credentials=creds)
-
 
 # ======================
 # ML MODEL
@@ -190,103 +200,149 @@ def get_parts_content(service, msg_id, payload):
 # ======================
 # PUSH ENDPOINT
 # ======================
-
 @app.post("/gmail/push")
 async def gmail_push(request: Request):
     envelope = await request.json()
-
-    email_address = envelope["message"]["attributes"].get("userEmail")
-    # 1. Fetch user state from Redis
-    user_data = await db.hgetall(f"user:{email_address}")
-    if not user_data:
-        return {"status": "user not found"}
     
-    if "message" not in envelope:
+    # Verify the push contains valid data
+    if "message" not in envelope or "data" not in envelope["message"]:
         return {"status": "ignored"}
 
-    # 1. Decode historyId from the notification
+    # 1. Decode the notification payload from Google Pub/Sub
     data = json.loads(base64.b64decode(envelope["message"]["data"]).decode())
-    current_history_id = data["historyId"]
-    print(f"🔔 Push notification received (historyId={current_history_id})")
+    email_address = data.get("emailAddress") 
+    current_history_id = int(data["historyId"])
+    print(f"🔔 Push notification received for {email_address} (historyId={current_history_id})")
 
-    service = get_gmail_service()
-    malicious_label_id = get_or_create_malicious_label(service)
+    # 2. Get the dynamic Gmail API service for THIS specific user
+    service = await get_user_service(email_address)
+    if not service:
+        return {"status": "user_not_authenticated"}
+    
+    # 3. Retrieve THIS user's last processed state from Redis
+    last_known_id = await db.get(f"history:{email_address}")
 
-    global LAST_HISTORY_ID
-
-    # 2. Handle first run
-    if LAST_HISTORY_ID is None:
-        LAST_HISTORY_ID = current_history_id
-        print("ℹ️ History baseline set.")
+    # Handle first-time baseline setup for a new user
+    if last_known_id is None:
+        await db.set(f"history:{email_address}", current_history_id)
+        print(f"ℹ️ History baseline set for {email_address}.")
         return {"status": "baseline set"}
 
+    # Ensure the label exists for this specific user
+    malicious_label_id = get_or_create_malicious_label(service)
+
     try:
-        # 3. Fetch history since the last known ID
+        # 4. Fetch changes since THIS user's last_known_id
         history_response = service.users().history().list(
             userId="me",
-            startHistoryId=LAST_HISTORY_ID,
+            startHistoryId=last_known_id,
             historyTypes=["messageAdded"]
         ).execute()
 
-        # Update baseline for next time
-        LAST_HISTORY_ID = current_history_id
-
-        # 4. Process only if there are new messages
+        # 5. Process new messages if they exist in the history
         if "history" in history_response:
             for h in history_response["history"]:
-                # Check for messages added to Inbox
                 for added in h.get("messagesAdded", []):
-                    # ... inside your 'for added in h.get("messagesAdded", [])' loop:
                     msg_id = added["message"]["id"]
 
-                    # Get full email content (required to see the 'payload' and 'parts')
+                    # Fetch full email content to see snippet and attachments
                     email = service.users().messages().get(
                         userId="me", id=msg_id, format="full"
                     ).execute()
 
                     is_malicious_found = False
-                    # Populate the list with Body + All Attachments individually
-                    all_contents = get_parts_content(service, msg_id, email['payload'])
-
-                    label, conf = classify_text(email['snippet'])
-                    print(f"⚖️ Verdict for Mail Body: {label} ({conf:.2%})")
+                    
+                    # Check the snippet first (fast check)
+                    label, conf = await classify_text(email.get('snippet', ''))
+                    print(f"⚖️ Verdict for {email_address} Mail Body: {label} ({conf:.2%})")
                     
                     if label == "Malicious":
                         is_malicious_found = True
                     else:
+                        # Deep scan attachments (PDF and Text)
+                        all_contents = get_parts_content(service, msg_id, email['payload'])
                         for item in all_contents:
                             if not item["content"].strip():
-                                print(f"⚠️ {item['source']} is empty, skipping...")
                                 continue
                                 
-                            label, conf = classify_text(item["content"])
+                            label, conf = await classify_text(item["content"])
                             print(f"⚖️ Verdict for {item['source']}: {label} ({conf:.2%})")
 
                             if label == "Malicious":
                                 is_malicious_found = True
                                 break
 
-                    # Take Action
+                    # 6. Take Action per User
                     if is_malicious_found:
-                        service.users().messages().modify(
-                            userId='me', id=msg_id,
-                            body={'addLabelIds': [malicious_label_id], 'removeLabelIds': ['INBOX']}
-                        ).execute()
-                        print(f"🚨 ACTION: Moved {msg_id} to Malicious folder.")
+                        move_to_malicious(service, msg_id, malicious_label_id)
+                        print(f"🚨 ACTION: Moved {msg_id} for {email_address} to Malicious folder.")
                     else:
-                        print(f"✅ ACTION: All parts passed. Kept {msg_id} in Inbox.")
+                        print(f"✅ ACTION: Kept {msg_id} in {email_address} Inbox.")
 
     except HttpError as error:
+        # 404 means the History ID is too old (expires after 7 days)
         if error.resp.status == 404:
-            print("⚠️ History ID expired. Resetting baseline...")
-            LAST_HISTORY_ID = current_history_id
+            print(f"⚠️ History ID expired for {email_address}. Resetting baseline...")
         else:
-            print(f"❌ API Error: {error}")
-
+            print(f"❌ API Error for {email_address}: {error}")
+    
+    # 7. Update the state in Redis for this user
+    await db.set(f"history:{email_address}", current_history_id)
     return {"status": "ok"}
+
+
+@app.get("/login")
+async def login():
+    # Use the credentials.json to create an OAuth flow
+    flow = Flow.from_client_config(
+        CLIENT_CONFIG,
+        scopes=SCOPES,
+        redirect_uri="https://jonell-ardeid-interpervasively.ngrok-free.dev/callback"
+    )
+    auth_url, _ = flow.authorization_url(prompt='consent', access_type='offline')
+    return {"auth_url": auth_url}
+
+@app.get("/callback")
+async def oauth_callback(code: str):
+    flow = Flow.from_client_config(
+        CLIENT_CONFIG,
+        scopes=SCOPES,
+        redirect_uri="https://jonell-ardeid-interpervasively.ngrok-free.dev/callback"
+    )
+    flow.fetch_token(code=code)
+    creds = flow.credentials
+
+    # FIX: Decode the ID token to get the email dictionary
+    try:
+        # verify_oauth2_token decodes the JWT string into a dictionary
+        id_info = id_token.verify_oauth2_token(
+            creds.id_token, 
+            requests.Request(), 
+            CLIENT_CONFIG['installed']['client_id']
+        )
+        email = id_info.get('email')
+    except Exception as e:
+        print(f"ID Token verification failed: {e}")
+        # Fallback to UserInfo API if token decoding fails
+        user_info_service = build('oauth2', 'v2', credentials=creds)
+        user_info = user_info_service.userinfo().get().execute()
+        email = user_info['email']
+
+    if not email:
+        return {"status": "error", "message": "Could not retrieve email address"}
+
+    # Save the real token and setup watching in Redis
+    await db.set(f"token:{email}", creds.to_json())
+    
+    gmail_service = build('gmail', 'v1', credentials=creds)
+    gmail_service.users().watch(
+        userId='me', 
+        body={'topicName': 'projects/unifonic-481420/topics/gmail-push'}
+    ).execute()
+
+    return {"status": "success", "user": email, "message": "Monitoring enabled!"}
 # ======================
 # RUN SERVER
 # ======================
 if __name__ == "__main__":
-    get_gmail_service()
     uvicorn.run("gmail:app", host="0.0.0.0", port=8002)

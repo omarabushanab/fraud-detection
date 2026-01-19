@@ -22,6 +22,9 @@ services:
   # Your Gmail background processor
   gmail_service:
     build: ./gmail_service
+    environment:
+      - REDIS_URL=redis://redis:6379  # Central database for user state
+      - DETECTOR_URL=http://xlmr_service:8001/predict
     ports:
       - "8002:8002"
     depends_on:
