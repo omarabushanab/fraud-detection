@@ -33,8 +33,14 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 
 
-CLIENT_CONFIG = json.load(open("credentials.json"))
+credentials_raw = os.getenv("GOOGLE_CREDENTIALS_JSON")
+if not credentials_raw:
+    raise ValueError("GOOGLE_CREDENTIALS_JSON environment variable is not set!")
 
+CLIENT_CONFIG = json.loads(credentials_raw)
+
+BASE_URL = os.getenv("BASE_URL", "https://jonell-ardeid-interpervasively.ngrok-free.dev")
+REDIRECT_URI = f"{BASE_URL}/callback"
 # Updated to include identity scopes
 SCOPES = [
     'https://www.googleapis.com/auth/gmail.modify',
@@ -1451,7 +1457,7 @@ async def login():
     flow = Flow.from_client_config(
         CLIENT_CONFIG,
         scopes=SCOPES,
-        redirect_uri="https://jonell-ardeid-interpervasively.ngrok-free.dev/callback"
+        redirect_uri=REDIRECT_URI
     )
     auth_url, _ = flow.authorization_url(prompt='consent', access_type='offline')
     return {"auth_url": auth_url}
@@ -1461,7 +1467,7 @@ async def oauth_callback(code: str):
     flow = Flow.from_client_config(
         CLIENT_CONFIG,
         scopes=SCOPES,
-        redirect_uri="https://jonell-ardeid-interpervasively.ngrok-free.dev/callback"
+        redirect_uri=REDIRECT_URI
     )
     flow.fetch_token(code=code)
     creds = flow.credentials
@@ -1494,7 +1500,7 @@ async def oauth_callback(code: str):
         body={'topicName': 'projects/unifonic-481420/topics/gmail-push'}
     ).execute()
     
-    return RedirectResponse(url="https://jonell-ardeid-interpervasively.ngrok-free.dev/")
+    return RedirectResponse(url=f"{BASE_URL}/")
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     return html_content

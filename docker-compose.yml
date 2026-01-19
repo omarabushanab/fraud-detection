@@ -10,9 +10,13 @@ services:
 
   gmail_service:
     build: ./gmail_service
+    env_file:
+      - .env
     environment:
-      - REDIS_URL=redis://redis:6379
-      - DETECTOR_URL=http://xlmr_service:8001/predict
+      - REDIS_URL=${REDIS_URL}
+      - DETECTOR_URL=${DETECTOR_URL}
+      - GOOGLE_CREDENTIALS_JSON=${GOOGLE_CREDENTIALS_JSON}
+      - BASE_URL=${BASE_URL}
     ports:
       - "8002:8002"
     depends_on:
@@ -22,19 +26,28 @@ services:
         condition: service_healthy
 
   redis:
-    image: redis/redis-stack:latest
+    image: redis:7
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    # Use command to disable protected mode and enable background saving
-    command: ["redis-server", "--protected-mode", "no", "--save", "60", "1"]
+    # We add --appendonly yes for better persistence and --dir /data to match the volume
+    command: ["redis-server", "--appendonly", "yes", "--dir", "/data", "--protected-mode", "no", "--save", "60", "1"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
     restart: always
+  
+  classifier_service:
+    build: ./classifier_service
+    environment:
+      - REDIS_URL=${REDIS_URL}
+    depends_on:
+      redis:
+        condition: service_healthy
+
 
 volumes:
   redis_data:
