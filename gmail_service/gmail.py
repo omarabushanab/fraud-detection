@@ -17,7 +17,7 @@ from google.auth.transport.requests import Request as GRequest
 from googleapiclient.errors import HttpError
 from google_auth_oauthlib.flow import Flow
 from pathlib import Path
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -53,7 +53,10 @@ app = FastAPI()
 # Configuration for Microservice Communication
 DETECTOR_SERVICE_URL = os.getenv("DETECTOR_URL", "http://xlmr_service:8001/predict")
 # Initialize Redis for multi-user state
-db = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379"), decode_responses=True)
+db = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379"), 
+                    decode_responses=True,
+                    health_check_interval=30,
+                    retry_on_timeout=True)
 
 class EmailRequest(BaseModel):
     email: str
@@ -1282,54 +1285,61 @@ def get_attachment_text(service, msg_id, parts):
 
 def get_parts_content(service, msg_id, payload):
     parts_to_classify = []
-    
-    # 1. Get the main body/snippet
-    snippet = payload.get('snippet', '')
-    if snippet:
-        parts_to_classify.append({"source": "Email Body", "content": snippet})
+        
+    # Use the msg_id to get the full message details from the service
+    message_details = service.users().messages().get(userId='me', id=msg_id).execute()
 
-    def walk_parts(parts):
-        for part in parts:
-            filename = part.get('filename')
-            if filename:
-                attachment_id = part['body'].get('attachmentId')
-                if attachment_id:
-                    attachment = service.users().messages().attachments().get(
-                        userId='me', messageId=msg_id, id=attachment_id
-                    ).execute()
-                    
-                    raw_data = base64.urlsafe_b64decode(attachment.get('data'))
-                    
-                    # --- PDF HANDLING ---
-                    if filename.lower().endswith('.pdf'):
-                        print(f"📄 Extracting text from PDF: {filename}")
-                        try:
-                            pdf_stream = io.BytesIO(raw_data)
-                            with fitz.open(stream=pdf_stream, filetype="pdf") as doc:
-                                text = ""
-                                for page in doc:
-                                    text += page.get_text()
-                            decoded_data = text
-                        except Exception as e:
-                            print(f"❌ PDF extraction failed: {e}")
-                            decoded_data = ""
-                    
-                    # --- TEXT/PLAIN HANDLING ---
-                    else:
-                        decoded_data = raw_data.decode('utf-8', errors='ignore')
-                    
-                    if decoded_data.strip():
-                        parts_to_classify.append({
-                            "source": f"Attachment: {filename}",
-                            "content": decoded_data
-                        })
-                        print(f"✅ Extracted content from {filename}")
+    # Check the labels to see if 'SENT' is present
+    labels = message_details.get('labelIds', [])
 
-            if 'parts' in part:
-                walk_parts(part['parts'])
+    if 'INBOX' in labels:
+        # This code only runs for RECEIVED mail (not sent)
+        snippet = payload.get('snippet', '')
+        if snippet:
+            parts_to_classify.append({"source": "Email Body", "content": snippet})
 
-    if 'parts' in payload:
-        walk_parts(payload['parts'])
+        def walk_parts(parts):
+            for part in parts:
+                filename = part.get('filename')
+                if filename:
+                    attachment_id = part['body'].get('attachmentId')
+                    if attachment_id:
+                        attachment = service.users().messages().attachments().get(
+                            userId='me', messageId=msg_id, id=attachment_id
+                        ).execute()
+                        
+                        raw_data = base64.urlsafe_b64decode(attachment.get('data'))
+                        
+                        # --- PDF HANDLING ---
+                        if filename.lower().endswith('.pdf'):
+                            print(f"📄 Extracting text from PDF: {filename}")
+                            try:
+                                pdf_stream = io.BytesIO(raw_data)
+                                with fitz.open(stream=pdf_stream, filetype="pdf") as doc:
+                                    text = ""
+                                    for page in doc:
+                                        text += page.get_text()
+                                decoded_data = text
+                            except Exception as e:
+                                print(f"❌ PDF extraction failed: {e}")
+                                decoded_data = ""
+                        
+                        # --- TEXT/PLAIN HANDLING ---
+                        else:
+                            decoded_data = raw_data.decode('utf-8', errors='ignore')
+                        
+                        if decoded_data.strip():
+                            parts_to_classify.append({
+                                "source": f"Attachment: {filename}",
+                                "content": decoded_data
+                            })
+                            print(f"✅ Extracted content from {filename}")
+
+                if 'parts' in part:
+                    walk_parts(part['parts'])
+
+        if 'parts' in payload:
+            walk_parts(payload['parts'])
         
     return parts_to_classify
 # ======================
@@ -1386,33 +1396,42 @@ async def gmail_push(request: Request):
                     ).execute()
 
                     is_malicious_found = False
-                    
-                    # Check the snippet first (fast check)
-                    label, conf = await classify_text(email.get('snippet', ''))
-                    print(f"⚖️ Verdict for {email_address} Mail Body: {label} ({conf:.2%})")
-                    
-                    if label == "Malicious":
-                        is_malicious_found = True
-                    else:
-                        # Deep scan attachments (PDF and Text)
-                        all_contents = get_parts_content(service, msg_id, email['payload'])
-                        for item in all_contents:
-                            if not item["content"].strip():
-                                continue
-                                
-                            label, conf = await classify_text(item["content"])
-                            print(f"⚖️ Verdict for {item['source']}: {label} ({conf:.2%})")
 
-                            if label == "Malicious":
-                                is_malicious_found = True
-                                break
+                    # Use the msg_id to get the full message details from the service
+                    message_details = service.users().messages().get(userId='me', id=msg_id).execute()
 
-                    # 6. Take Action per User
-                    if is_malicious_found:
-                        move_to_malicious(service, msg_id, malicious_label_id)
-                        print(f"🚨 ACTION: Moved {msg_id} for {email_address} to Malicious folder.")
-                    else:
-                        print(f"✅ ACTION: Kept {msg_id} in {email_address} Inbox.")
+                    # Check the labels to see if 'SENT' is present
+                    labels = message_details.get('labelIds', [])
+                    print(f"📧 Processing message {msg_id} for {email_address} with labels: {labels}")
+
+                    if 'INBOX' in labels:
+                    
+                        # Check the snippet first (fast check)
+                        label, conf = await classify_text(email.get('snippet', ''))
+                        print(f"⚖️ Verdict for {email_address} Mail Body: {label} ({conf:.2%})")
+                        
+                        if label == "Malicious":
+                            is_malicious_found = True
+                        else:
+                            # Deep scan attachments (PDF and Text)
+                            all_contents = get_parts_content(service, msg_id, email['payload'])
+                            for item in all_contents:
+                                if not item["content"].strip():
+                                    continue
+                                    
+                                label, conf = await classify_text(item["content"])
+                                print(f"⚖️ Verdict for {item['source']}: {label} ({conf:.2%})")
+
+                                if label == "Malicious":
+                                    is_malicious_found = True
+                                    break
+
+                        # 6. Take Action per User
+                        if is_malicious_found:
+                            move_to_malicious(service, msg_id, malicious_label_id)
+                            print(f"🚨 ACTION: Moved {msg_id} for {email_address} to Malicious folder.")
+                        else:
+                            print(f"✅ ACTION: Kept {msg_id} in {email_address} Inbox.")
 
     except HttpError as error:
         # 404 means the History ID is too old (expires after 7 days)
@@ -1453,7 +1472,7 @@ async def oauth_callback(code: str):
         id_info = id_token.verify_oauth2_token(
             creds.id_token, 
             requests.Request(), 
-            CLIENT_CONFIG['installed']['client_id']
+            CLIENT_CONFIG['web']['client_id']
         )
         email = id_info.get('email')
     except Exception as e:
@@ -1474,9 +1493,8 @@ async def oauth_callback(code: str):
         userId='me', 
         body={'topicName': 'projects/unifonic-481420/topics/gmail-push'}
     ).execute()
-
-    return {"status": "success", "user": email, "message": "Monitoring enabled!"}
-
+    
+    return RedirectResponse(url="https://jonell-ardeid-interpervasively.ngrok-free.dev/")
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     return html_content

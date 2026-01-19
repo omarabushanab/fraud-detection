@@ -1,8 +1,6 @@
 version: '3.8'
 
 services:
-
-  # Your existing ML service
   xlmr_service:
     build: ./xlmr_service
     ports:
@@ -10,25 +8,33 @@ services:
     environment:
       - MODEL_DIR=/app/model/xlm-r-phishing-final
 
-  # Your Gmail background processor
   gmail_service:
     build: ./gmail_service
     environment:
-      - REDIS_URL=redis://redis:6379  # Central database for user state
+      - REDIS_URL=redis://redis:6379
       - DETECTOR_URL=http://xlmr_service:8001/predict
     ports:
       - "8002:8002"
     depends_on:
-      - xlmr_service
-      - redis  # Redis for storing multi-user tokens and history IDs
+      xlmr_service:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
   redis:
     image: redis/redis-stack:latest
     ports:
       - "6379:6379"
     volumes:
-      - redis_data:/data  # This maps a Docker volume to the Redis data directory
-    command: redis-server --save 60 1 --loglevel warning # Save every 60 seconds if 1 key changed
+      - redis_data:/data
+    # Use command to disable protected mode and enable background saving
+    command: ["redis-server", "--protected-mode", "no", "--save", "60", "1"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     restart: always
 
 volumes:
-  redis_data: # Define the volume at the bottom of the file
+  redis_data:

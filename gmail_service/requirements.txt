@@ -3,6 +3,6 @@ uvicorn[standard]==0.27.1
 google-api-python-client
 google-auth-oauthlib
 httpx
-redis
+redis>=5.0.0
 pymupdf
 python-multipart
