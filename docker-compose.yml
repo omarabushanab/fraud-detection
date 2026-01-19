@@ -1,15 +1,6 @@
 version: '3.8'
 
 services:
-  # The UI Dashboard
-  ui_service:
-    build: ./ui_service  # Folder containing the UI main.py and Dockerfile
-    ports:
-      - "8000:8000"     # UI will be at http://localhost:8000
-    environment:
-      - DETECTOR_URL=http://xlmr_service:8001/predict
-    depends_on:
-      - xlmr_service
 
   # Your existing ML service
   xlmr_service:
@@ -31,6 +22,14 @@ services:
       - xlmr_service
       - redis  # Redis for storing multi-user tokens and history IDs
   redis:
-    image: redis:alpine
+    image: redis/redis-stack:latest
     ports:
       - "6379:6379"
+      - "8001:8001"
+    volumes:
+      - redis_data:/data  # This maps a Docker volume to the Redis data directory
+    command: redis-server --save 60 1 --loglevel warning # Save every 60 seconds if 1 key changed
+    restart: always
+
+volumes:
+  redis_data: # Define the volume at the bottom of the file

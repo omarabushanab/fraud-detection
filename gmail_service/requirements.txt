@@ -5,3 +5,4 @@ google-auth-oauthlib
 httpx
 redis
 pymupdf
+python-multipart
