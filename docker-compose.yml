@@ -42,6 +42,8 @@ services:
   
   classifier_service:
     build: ./classifier_service
+    env_file:
+      - .env
     environment:
       - REDIS_URL=${REDIS_URL}
     depends_on:
