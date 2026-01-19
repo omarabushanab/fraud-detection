@@ -25,7 +25,6 @@ services:
     image: redis/redis-stack:latest
     ports:
       - "6379:6379"
-      - "8001:8001"
     volumes:
       - redis_data:/data  # This maps a Docker volume to the Redis data directory
     command: redis-server --save 60 1 --loglevel warning # Save every 60 seconds if 1 key changed
