@@ -1,0 +1,7 @@
+lightgbm
+scikit-learn
+numpy
+pandas
+redis
+joblib
+matplotlib

@@ -1,9 +1,9 @@
 from sklearn.metrics import roc_auc_score, confusion_matrix, accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-from core.preprocessing.uri_data_preprocessing import uri_data_preprocessing
+from preprocessing.uri_data_preprocessing import uri_data_preprocessing
 import joblib
 import numpy as np
 
-MODEL_PATH = "core/models/uri_lgbm_model_domain.joblib"
+MODEL_PATH = "models/uri_lgbm_model_domain.joblib"
 model = joblib.load(MODEL_PATH)
 
 X_train, X_val, y_train, y_val = uri_data_preprocessing()

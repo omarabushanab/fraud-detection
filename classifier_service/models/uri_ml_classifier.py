@@ -1,6 +1,6 @@
 import lightgbm as lgb
 import matplotlib.pyplot as plt
-from core.preprocessing.uri_data_preprocessing import uri_data_preprocessing
+from preprocessing.uri_data_preprocessing import uri_data_preprocessing
 from lightgbm import LGBMClassifier
 import joblib
 from pathlib import Path

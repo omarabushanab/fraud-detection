@@ -1,9 +1,10 @@
+import time
 import pandas as pd
-from core.preprocessing.uri_feature_extractor import extract_features,extract_domain_features, canonicalize_domain
+from preprocessing.uri_feature_extractor import extract_features,extract_domain_features, canonicalize_domain
 import joblib
-from core.cache.uri_cache import get_cached_uri, cache_uri_result
+from cache.uri_cache import get_cached_uri, cache_uri_result
 
-MODEL_PATH = "core/models/uri_lgbm_model_domain.joblib"
+MODEL_PATH = "models/uri_lgbm_model_domain.joblib"
 
 def load_model():
     return joblib.load(MODEL_PATH)
@@ -42,7 +43,10 @@ def predict_url(url, threshold=0.72):
 def main():
     test_url = input("Enter a URL to classify: ")
     result = predict_url(test_url)
+
+    print("===== URI INFERENCE RESULT =====")
     print(result)
+    print("================================")
 
 if __name__ == "__main__":
     main()
