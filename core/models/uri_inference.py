@@ -1,14 +1,23 @@
 import pandas as pd
 from core.preprocessing.uri_feature_extractor import extract_features,extract_domain_features, canonicalize_domain
 import joblib
+from core.cache.uri_cache import get_cached_uri, cache_uri_result
 
 MODEL_PATH = "core/models/uri_lgbm_model_domain.joblib"
 
 def load_model():
     return joblib.load(MODEL_PATH)
 
+
 def predict_url(url, threshold=0.72):
     model = load_model()
+
+     # 1️⃣ Check cache
+    cached = get_cached_uri(url)
+    if cached:
+        cached["source"] = "cache"
+        print("Cache hit")
+        return cached
 
     # Extract features
     features = extract_domain_features(canonicalize_domain(url))
@@ -17,11 +26,18 @@ def predict_url(url, threshold=0.72):
     prob = model.predict_proba(X)[0, 1]
     pred = int(prob >= threshold)
 
-    return {
+    result = {
         "url": url,
         "prediction": "PHISHING" if pred == 1 else "BENIGN",
-        "probability": float(prob)
+        "probability": float(prob),
+        "threshold": threshold,
+        "source": "model"
     }
+
+    # 3️⃣ Cache result
+    cache_uri_result(url, result)
+
+    return result
 
 def main():
     test_url = input("Enter a URL to classify: ")
