@@ -1,25 +1,34 @@
 version: '3.8'
 
 services:
-  # The ML Classification Component
-  classifier-api:
-    build: ./xlmr_service
-    image: phishing-classifier:v1
-    ports:
-      - "8000:8000"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
-  # The main logic that connects to Gmail and handles preprocessing
-  orchestrator:
-    build: ./orchestrator
-    depends_on:
-      classifier-api:
-        condition: service_healthy # Only starts orchestrator once the model is loaded
+  # Your existing ML service
+  xlmr_service:
+    build: ./xlmr_service
+    ports:
+      - "8001:8001"
     environment:
-      - CLASSIFIER_URL=http://classifier-api:8000/predict
+      - MODEL_DIR=/app/model/xlm-r-phishing-final
+
+  # Your Gmail background processor
+  gmail_service:
+    build: ./gmail_service
+    environment:
+      - REDIS_URL=redis://redis:6379  # Central database for user state
+      - DETECTOR_URL=http://xlmr_service:8001/predict
+    ports:
+      - "8002:8002"
+    depends_on:
+      - xlmr_service
+      - redis  # Redis for storing multi-user tokens and history IDs
+  redis:
+    image: redis/redis-stack:latest
+    ports:
+      - "6379:6379"
     volumes:
-      - ./orchestrator/token.pickle:/app/token.pickle
+      - redis_data:/data  # This maps a Docker volume to the Redis data directory
+    command: redis-server --save 60 1 --loglevel warning # Save every 60 seconds if 1 key changed
+    restart: always
+
+volumes:
+  redis_data: # Define the volume at the bottom of the file

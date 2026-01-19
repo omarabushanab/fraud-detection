@@ -1,15 +1,27 @@
 from fastapi import FastAPI, Request, Form
+from pathlib import Path
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
 import uvicorn
-from gmail import classify_text
-from processor import clean_and_classify
+from pydantic import BaseModel
+import os
+import httpx
+from fastapi import FastAPI, Request, Form
+from fastapi.responses import HTMLResponse, JSONResponse
+
 
 app = FastAPI()
+
+DETECTOR_URL = os.getenv("DETECTOR_URL", "http://xlmr_service:8001/predict")
+
 class EmailRequest(BaseModel):
     email: str
 
-# Paste your 'html_content' variable here (The one with the Shield UI)
+
+
+
+        
 # HTML template embedded in the code
 html_content = """
 <!DOCTYPE html>
@@ -723,31 +735,71 @@ html_content = """
             }
         });
     </script>
+    <div class="subscription-section" style="margin-top: 30px; border-top: 1px solid rgba(138, 180, 248, 0.1); padding-top: 20px;">
+    <button onclick="startSubscription()" id="subBtn" style="background: linear-gradient(135deg, #10b981 0%, #34d399 100%);">
+        <span>CONNECT NEW GMAIL INBOX</span>
+    </button>
+    <p id="subStatus" style="color: rgba(138, 180, 248, 0.7); font-size: 12px; margin-top: 10px;"></p>
+</div>
+
+<script>
+async function startSubscription() {
+    const btn = document.getElementById('subBtn');
+    const status = document.getElementById('subStatus');
+    
+    try {
+        // Step 1: Call your backend to get the Google Auth URL
+        const response = await fetch('https://jonell-ardeid-interpervasively.ngrok-free.dev/login');
+        const data = await response.json();
+        
+        if (data.auth_url) {
+            status.textContent = "Redirecting to Google...";
+            // Step 2: Redirect user to Google's consent screen
+            window.location.href = data.auth_url;
+        }
+    } catch (error) {
+        status.textContent = "Error starting subscription. Please check console.";
+        console.error(error);
+    }
+}
+</script>
 </body>
 </html>
 """
 
+async def classify_text(text):
+    """Sends text to the containerized ML model service"""
+    async with httpx.AsyncClient() as client:
+        try:
+            # Call the ML service over the Docker network
+            response = await client.post(DETECTOR_URL, json={"text": text}, timeout=15.0)
+            data = response.json()
+            return data["label"], data["confidence"]
+        except Exception as e:
+            print(f"Connection error to ML service: {e}")
+            return "Error", 0.0
 
 
 @app.get("/", response_class=HTMLResponse)
-async def home():
+async def home(request: Request):
     return html_content
 
 @app.post("/api/message")
 async def api_submit_message(message: str = Form(...)):
-    # Uses the SAME processor as the Gmail listener
-    label, confidence, urls = clean_and_classify(message)
+    print(f"Received message: {message}")
+    label, confidence = await classify_text(message)
+    print(f"Label: {label}, Confidence: {confidence:.2%}")
     
     return JSONResponse({
         "status": "success",
         "label": label,
         "confidence": confidence,
-        "urls_detected": urls
+        "message": message
     })
 
 @app.post("/api/classify-email")
 async def classify_email(request: EmailRequest):
-    label, confidence = classify_text(request.email)
+    label, confidence = await classify_text(request.email)
 
     return {
         "email": request.email,

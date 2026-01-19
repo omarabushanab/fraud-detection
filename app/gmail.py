@@ -7,13 +7,15 @@ import io
 from fastapi import FastAPI, Request
 import uvicorn
 
+import httpx
+import redis.asyncio as redis
+from google.oauth2.credentials import Credentials
+
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request as GRequest
+from googleapiclient.errors import HttpError
 
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-import torch
-import torch.nn.functional as F
 
 
 # ======================
@@ -30,6 +32,11 @@ LAST_HISTORY_ID = None
 # ======================
 app = FastAPI()
 
+
+# Configuration for Microservice Communication
+DETECTOR_SERVICE_URL = os.getenv("DETECTOR_URL", "http://xlmr_service:8001/predict")
+# Initialize Redis for multi-user state
+db = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379"), decode_responses=True)
 
 # ======================
 # GMAIL AUTH (OAuth)
@@ -60,11 +67,7 @@ def get_gmail_service():
 # ======================
 # ML MODEL
 # ======================
-tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, local_files_only=True)
-model = AutoModelForSequenceClassification.from_pretrained(
-    MODEL_PATH, local_files_only=True
-)
-model.eval()
+
 
 def get_or_create_malicious_label(service):
     labels = service.users().labels().list(userId="me").execute()["labels"]
@@ -95,18 +98,19 @@ def move_to_malicious(service, msg_id, label_id):
         }
     ).execute()
 
-def classify_text(text):
-    inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True)
-    with torch.no_grad():
-        outputs = model(**inputs)
-        probs = F.softmax(outputs.logits, dim=-1)
-
-    idx = torch.argmax(probs, dim=-1).item()
-    label = "Safe" if idx == 0 else "Malicious"
-    confidence = probs[0][idx].item()
-
-    return label, confidence
-
+async def classify_text(text):
+    """Calls your existing containerized model service"""
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(DETECTOR_SERVICE_URL, json={"text": text}, timeout=10.0)
+            data = response.json()
+            # Map labels to your Gmail logic (Safe/Malicious)
+            label = "Malicious" if data["label"] == "phishing" else "Safe"
+            return label, data["confidence"]
+        except Exception as e:
+            print(f"Connection error to detector: {e}")
+            return "Safe", 0.0
+        
 def get_attachment_text(service, msg_id, parts):
     attachment_texts = []
     for part in parts:
@@ -185,11 +189,16 @@ def get_parts_content(service, msg_id, payload):
 # ======================
 # PUSH ENDPOINT
 # ======================
-from googleapiclient.errors import HttpError
 
 @app.post("/gmail/push")
 async def gmail_push(request: Request):
     envelope = await request.json()
+    email_address = envelope["message"]["attributes"].get("userEmail")
+    # 1. Fetch user state from Redis
+    user_data = await db.hgetall(f"user:{email_address}")
+    if not user_data:
+        return {"status": "user not found"}
+    
     if "message" not in envelope:
         return {"status": "ignored"}
 
@@ -278,4 +287,4 @@ async def gmail_push(request: Request):
 # ======================
 if __name__ == "__main__":
     get_gmail_service()
-    uvicorn.run("gmail:app", host="0.0.0.0", port=8000)
+    uvicorn.run("gmail:app", host="0.0.0.0", port=8002)
