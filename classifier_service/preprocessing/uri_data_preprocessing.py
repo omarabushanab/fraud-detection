@@ -1,6 +1,6 @@
 import pandas as pd
 
-from core.preprocessing.uri_feature_extractor import extract_features, extract_domain_features, canonicalize_domain
+from preprocessing.uri_feature_extractor import extract_features, extract_domain_features, canonicalize_domain
 from sklearn.model_selection import train_test_split
 
 def uri_data_preprocessing():
