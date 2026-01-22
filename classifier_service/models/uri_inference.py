@@ -3,8 +3,11 @@ import pandas as pd
 from preprocessing.uri_feature_extractor import extract_features,extract_domain_features, canonicalize_domain
 import joblib
 from cache.uri_cache import get_cached_uri, cache_uri_result
+from fastapi import FastAPI
 
 MODEL_PATH = "models/uri_lgbm_model_domain.joblib"
+
+app = FastAPI(title="URI Phishing Classifier Service")
 
 def load_model():
     return joblib.load(MODEL_PATH)
@@ -40,13 +43,14 @@ def predict_url(url, threshold=0.72):
 
     return result
 
-def main():
-    test_url = input("Enter a URL to classify: ")
-    result = predict_url(test_url)
 
-    print("===== URI INFERENCE RESULT =====")
-    print(result)
-    print("================================")
+# test_url = input("Enter a URL to classify: ")
+# result = predict_url(test_url)
+@app.post("/classify_url")
+def classify_url(url: str):
+    return predict_url(url)
 
-if __name__ == "__main__":
-    main()
+# print("===== URI INFERENCE RESULT =====")
+# print(result)
+# print("================================")
+
