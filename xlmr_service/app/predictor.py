@@ -1,6 +1,7 @@
 import torch
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
 import os
+import shap 
 
 #Explicit Model Dir: Ensure the predictor doesn't try to download weights from the internet if they are already present locally.
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
@@ -15,7 +16,23 @@ class XLMRPredictor:
         self.model = AutoModelForSequenceClassification.from_pretrained(model_path, local_files_only=True)
         self.model.to(self.device)
         self.model.eval()
+        self.explainer_pipeline = pipeline(
+            "text-classification", 
+            model=self.model, 
+            tokenizer=self.tokenizer, 
+            device=self.device,
+            top_k=None
+        )
+        self.explainer = shap.Explainer(self.explainer_pipeline)
 
+    def explain(self, text):
+        shap_values = self.explainer([text])
+        tokens = shap_values.data[0]
+        values = shap_values.values[0][:, 1]  # Get SHAP values for the 'phishing' class
+        # Get words with high impact (positive SHAP values)
+        triggers = [tokens[i].strip() for i, val in enumerate(values) if val > 0.05]
+        return list(set(triggers))
+    
     def predict(self, text: str):
         inputs = self.tokenizer(
             text, 

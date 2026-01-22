@@ -29,6 +29,10 @@ def health():
     return {"status": "ok", "device": str(predictor.device)}
 
 
+@app.post("/explain")
+def explain(req: TextRequest):
+    return {"triggers": predictor.explain(req.text)}
+
 @app.post("/predict")
 def predict(req: TextRequest):
     return predictor.predict(req.text)

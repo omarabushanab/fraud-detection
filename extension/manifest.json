@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "AI Phish Guard",
+  "version": "1.0",
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": [
+    "https://mail.google.com/*", 
+    "https://jonell-ardeid-interpervasively.ngrok-free.dev/*"
+  ],
+  "action": { "default_popup": "popup.html" },
+  "content_scripts": [{
+    "matches": ["https://mail.google.com/*"],
+    "js": ["content.js"],
+    "type": "module" 
+  }]
+}
