@@ -1,12 +1,26 @@
-version: '3.8'
 
 services:
   xlmr_service:
     build: ./xlmr_service
+    env_file:
+      - .env
     ports:
       - "8001:8001"
     environment:
       - MODEL_DIR=/app/model/xlm-r-phishing-final
+ 
+  classifier_service:
+    build: ./classifier_service
+    ports:
+      - "8003:8003"
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=${REDIS_URL}
+    depends_on:
+      redis:
+        condition: service_healthy
+
 
   gmail_service:
     build: ./gmail_service
@@ -25,6 +39,8 @@ services:
       redis:
         condition: service_healthy
 
+  
+
   redis:
     image: redis:7
     ports:
@@ -40,15 +56,6 @@ services:
       retries: 5
     restart: always
   
-  classifier_service:
-    build: ./classifier_service
-    env_file:
-      - .env
-    environment:
-      - REDIS_URL=${REDIS_URL}
-    depends_on:
-      redis:
-        condition: service_healthy
 
 
 volumes:

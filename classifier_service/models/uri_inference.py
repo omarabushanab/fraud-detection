@@ -4,8 +4,13 @@ from preprocessing.uri_feature_extractor import extract_features,extract_domain_
 import joblib
 from cache.uri_cache import get_cached_uri, cache_uri_result
 from fastapi import FastAPI
+from pydantic import BaseModel
 
 MODEL_PATH = "models/uri_lgbm_model_domain.joblib"
+
+class URLRequest(BaseModel):
+    url: str
+
 
 app = FastAPI(title="URI Phishing Classifier Service")
 
@@ -47,8 +52,8 @@ def predict_url(url, threshold=0.72):
 # test_url = input("Enter a URL to classify: ")
 # result = predict_url(test_url)
 @app.post("/classify_url")
-def classify_url(url: str):
-    return predict_url(url)
+def classify_url(request: URLRequest):
+    return predict_url(request.url)
 
 # print("===== URI INFERENCE RESULT =====")
 # print(result)

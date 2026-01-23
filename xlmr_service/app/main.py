@@ -7,6 +7,7 @@ from app.predictor import XLMRPredictor
 
 app = FastAPI(title="XLM-R Phishing Detection Service")
 
+
 # Allow override via env (useful if model is mounted instead of baked in)
 MODEL_PATH = os.getenv(
     "MODEL_DIR",
@@ -23,6 +24,8 @@ predictor = XLMRPredictor(MODEL_PATH)
 class TextRequest(BaseModel):
     text: str
 
+class BatchRequest(BaseModel):
+    texts: list[str]
 
 @app.get("/health")
 def health():
@@ -34,5 +37,9 @@ def explain(req: TextRequest):
     return {"triggers": predictor.explain(req.text)}
 
 @app.post("/predict")
-def predict(req: TextRequest):
-    return predictor.predict(req.text)
+async def predict(req: TextRequest):
+    return await predictor.predict(req.text)
+
+@app.post("/predict_batch")
+async def predict_batch(req: BatchRequest):
+    return await predictor.predict_batch(req.texts)
