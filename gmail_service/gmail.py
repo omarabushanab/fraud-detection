@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from fastapi.responses import HTMLResponse, JSONResponse
 
 
-
+from fastapi.middleware.cors import CORSMiddleware  #
 
 # ======================
 # CONFIG
@@ -54,7 +54,23 @@ SCOPES = [
 # ======================
 app = FastAPI()
 
+# 1. Define the origins that are allowed to talk to your API
+origins = [
+    "http://localhost",
+    "http://localhost:8002",
+    # Use your actual Extension ID from chrome://extensions
+    "chrome-extension://ogdpbgagjdkapaokiggidfmbpmpfdgee", 
+    "https://jonell-ardeid-interpervasively.ngrok-free.dev"
+]
 
+# 2. Add the middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],            # Permits these domains
+    # allow_credentials=True,          # Allows cookies/auth headers
+    allow_methods=["*"],              # Permits all methods (GET, POST, etc.)
+    allow_headers=["*"],              # Permits all headers
+)
 
 # Configuration for Microservice Communication
 DETECTOR_SERVICE_URL = os.getenv("DETECTOR_URL", "http://xlmr_service:8001/predict")
@@ -1527,6 +1543,14 @@ async def classify_email(request: EmailRequest):
         "verdict": label,
         "confidence_percentage": round(confidence * 100, 2)
     }
+
+@app.post("/analyze-full")
+async def proxy_analyze_full(req: EmailRequest):
+    async with httpx.AsyncClient() as client:
+        # Forward the request to the internal xlmr_service
+        explainer_service_url = os.getenv("EXPLAINER_URL", "http://xlmr_service:8001/analyze-full")
+        response = await client.post(explainer_service_url, json={"text": req.email}, timeout=20.0)
+        return response.json()
 
 # ======================
 # RUN SERVER

@@ -1,6 +1,25 @@
-import { CONFIG } from './config.js';
+const API_BASE_URL = "https://jonell-ardeid-interpervasively.ngrok-free.dev";
 
-document.getElementById('subscribeBtn').addEventListener('click', () => {
-    // This connects the extension's button to your existing /login flow
-    chrome.tabs.create({ url: `${CONFIG.API_BASE_URL}/login` });
+document.addEventListener('DOMContentLoaded', function() {
+    const btn = document.getElementById('subscribeBtn');
+    
+    if (btn) {
+        btn.addEventListener('click', async () => {
+            try {
+                // 1. Fetch the JSON from your existing API
+                const response = await fetch(`${API_BASE_URL}/login`);
+                const data = await response.json();
+                
+                // 2. Extract the URL string from the JSON object
+                if (data.auth_url) {
+                    console.log("Redirecting to Google...");
+                    chrome.tabs.create({ url: data.auth_url });
+                } else {
+                    console.error("Invalid response format:", data);
+                }
+            } catch (error) {
+                console.error("Connection failed. Is the backend/ngrok running?", error);
+            }
+        });
+    }
 });

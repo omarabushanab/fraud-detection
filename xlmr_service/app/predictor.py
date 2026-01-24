@@ -30,14 +30,20 @@ class XLMRPredictor:
         )
         self.explainer = shap.Explainer(self.explainer_pipeline)
 
+    # predictor.py
     def explain(self, text):
         shap_values = self.explainer([text])
         tokens = shap_values.data[0]
-        values = shap_values.values[0][:, 1]  # Get SHAP values for the 'phishing' class
-        # Get words with high impact (positive SHAP values)
-        triggers = [tokens[i].strip() for i, val in enumerate(values) if val > 0.05]
+        values = shap_values.values[0][:, 1]
+        
+        # Filter for impact > 0.05 and ignore tokens shorter than 3 chars
+        triggers = [
+            tokens[i].replace('Ġ', '').strip() 
+            for i, val in enumerate(values) 
+            if val > 0.05 and len(tokens[i].replace('Ġ', '').strip()) > 2
+        ]
         return list(set(triggers))
-    
+
     async def predict(self, text: str):
         url = None
         # extract urls if any

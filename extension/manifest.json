@@ -10,7 +10,6 @@
   "action": { "default_popup": "popup.html" },
   "content_scripts": [{
     "matches": ["https://mail.google.com/*"],
-    "js": ["content.js"],
-    "type": "module" 
+    "js": ["config.js", "content.js"]
   }]
 }
