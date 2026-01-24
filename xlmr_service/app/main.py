@@ -42,6 +42,10 @@ predictor = XLMRPredictor(MODEL_PATH)
 class TextRequest(BaseModel):
     text: str
 
+class TextURLRequest(BaseModel):
+    text: str
+    urls: list[str]
+
 class BatchRequest(BaseModel):
     texts: list[str]
 
@@ -55,8 +59,8 @@ def explain(req: TextRequest):
     return {"triggers": predictor.explain(req.text)}
 
 @app.post("/predict")
-async def predict(req: TextRequest):
-    return await predictor.predict(req.text)
+async def predict(req: TextURLRequest):
+    return await predictor.predict(req.text, req.urls)
 
 @app.post("/predict_batch")
 async def predict_batch(req: BatchRequest):

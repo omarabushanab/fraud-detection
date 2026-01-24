@@ -44,12 +44,9 @@ class XLMRPredictor:
         ]
         return list(set(triggers))
 
-    async def predict(self, text: str):
-        url = None
-        # extract urls if any
-        extractor = URLExtract()
-        urls = extractor.find_urls(text)
+    async def predict(self, text: str, urls: list[str] = []):
         print("Extracted URLs:", urls)
+        url = None
         for u in urls:
             url = u
             async with httpx.AsyncClient() as client:

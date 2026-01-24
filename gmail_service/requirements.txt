@@ -6,3 +6,4 @@ httpx
 redis>=5.0.0
 pymupdf
 python-multipart
+beautifulsoup4==4.12.3

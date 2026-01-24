@@ -23,7 +23,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from fastapi.responses import HTMLResponse, JSONResponse
-
+import re
+from bs4 import BeautifulSoup
 
 from fastapi.middleware.cors import CORSMiddleware  #
 
@@ -1269,11 +1270,12 @@ def move_to_malicious(service, msg_id, label_id):
         }
     ).execute()
 
-async def classify_text(text):
+async def classify_text(text, found_uris = []):
     """Calls your existing containerized model service"""
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.post(DETECTOR_SERVICE_URL, json={"text": text}, timeout=10.0)
+            response = await client.post(DETECTOR_SERVICE_URL, json={"text": text, "urls": found_uris}, timeout=10.0)
+            response.raise_for_status() # Raise error for bad responses
             data = response.json()
             # Map labels to your Gmail logic (Safe/Malicious)
             label = "Malicious" if data["label"] == "phishing" else "Safe"
@@ -1316,10 +1318,6 @@ def get_parts_content(service, msg_id, payload):
 
     if 'INBOX' in labels:
         # This code only runs for RECEIVED mail (not sent)
-        snippet = payload.get('snippet', '')
-        if snippet:
-            parts_to_classify.append({"source": "Email Body", "content": snippet})
-
         def walk_parts(parts):
             for part in parts:
                 filename = part.get('filename')
@@ -1364,6 +1362,62 @@ def get_parts_content(service, msg_id, payload):
             walk_parts(payload['parts'])
         
     return parts_to_classify
+
+def extract_all_uris(service, msg_id, payload):
+    """
+    Extracts all clickable/embedded URIs from the email body (HTML) 
+    and from inside PDF attachments.
+    """
+    all_uris = set()
+    # Regex to catch plain-text URLs that aren't wrapped in <a> tags
+    url_regex = r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+'
+
+    def walk_parts(parts):
+        for part in parts:
+            mime_type = part.get('mimeType')
+            body = part.get('body', {})
+            filename = part.get('filename', '')
+
+            # --- 1. SCAN HTML BODY ---
+            if mime_type == 'text/html' and 'data' in body:
+                raw_html = base64.urlsafe_b64decode(body['data']).decode('utf-8', errors='ignore')
+                soup = BeautifulSoup(raw_html, 'html.parser')
+                # Extract actual 'href' destinations
+                for a in soup.find_all('a', href=True):
+                    all_uris.add(a['href'])
+                # Also run regex to catch raw text links in HTML
+                all_uris.update(re.findall(url_regex, raw_html))
+
+            # --- 2. SCAN PDF EMBEDDED LINKS ---
+            elif filename.lower().endswith('.pdf') and 'attachmentId' in body:
+                try:
+                    attachment = service.users().messages().attachments().get(
+                        userId='me', messageId=msg_id, id=body['attachmentId']).execute()
+                    pdf_data = base64.urlsafe_b64decode(attachment['data'])
+                    
+                    with fitz.open(stream=io.BytesIO(pdf_data), filetype="pdf") as doc:
+                        for page in doc:
+                            # This is the critical part for "hidden" hacking links
+                            for link in page.get_links():
+                                if 'uri' in link:
+                                    all_uris.add(link['uri'])
+                            
+                            # Also check text for written-out URLs
+                            all_uris.update(re.findall(url_regex, page.get_text()))
+                except Exception as e:
+                    print(f"❌ Error scanning PDF {filename}: {e}")
+
+            if 'parts' in part:
+                walk_parts(part['parts'])
+
+    if 'parts' in payload:
+        walk_parts(payload['parts'])
+    elif 'body' in payload:
+        walk_parts([payload])
+
+    return list(all_uris)
+
+
 # ======================
 # PUSH ENDPOINT
 # ======================
@@ -1426,10 +1480,15 @@ async def gmail_push(request: Request):
                     labels = message_details.get('labelIds', [])
                     print(f"📧 Processing message {msg_id} for {email_address} with labels: {labels}")
 
+                    found_uris = []
                     if 'INBOX' in labels:
                     
                         # Check the snippet first (fast check)
-                        label, conf = await classify_text(email.get('snippet', ''))
+                        found_uris = extract_all_uris(service, msg_id, email['payload'])
+                        print(f"🔗 Found these URIs in email MN_TG : {found_uris}")
+                        ## sends email body and all uris found in email to xlmr model
+                        label, conf = await classify_text(email.get('snippet', ''), found_uris)
+
                         print(f"⚖️ Verdict for {email_address} Mail Body: {label} ({conf:.2%})")
                         
                         if label == "Malicious":
@@ -1465,6 +1524,8 @@ async def gmail_push(request: Request):
     # 7. Update the state in Redis for this user
     await db.set(f"history:{email_address}", current_history_id)
     return {"status": "ok"}
+
+
 
 
 @app.get("/login")
