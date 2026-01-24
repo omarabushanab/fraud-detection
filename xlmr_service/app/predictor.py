@@ -43,6 +43,13 @@ class XLMRPredictor:
             if val > 0.05 and len(tokens[i].replace('Ġ', '').strip()) > 2
         ]
         return list(set(triggers))
+    
+    async def predict_for_analyze(self, text: str):
+        # Extract URLs from text
+        extractor = URLExtract()
+        urls = extractor.find_urls(text)
+        print("these are the urls found by the extension:", urls)
+        return await self.predict(text, urls)
 
     async def predict(self, text: str, urls: list[str] = []):
         print("Extracted URLs:", urls)
@@ -98,6 +105,7 @@ class XLMRPredictor:
             "confidence": round(confidence, 4)
         }
     
+
     async def predict_batch(self, texts: list[str]):
         # 1. Batch Tokenization (Efficient)
         inputs = self.tokenizer(

@@ -69,7 +69,7 @@ async def predict_batch(req: BatchRequest):
 @app.post("/analyze_full")
 async def analyze_full(req: TextRequest):
     # 1. Run the prediction (which checks URLs first, then XLM-R)
-    result = await predictor.predict(req.text)
+    result = await predictor.predict_for_analyze(req.text)
     
     explanation = []
     reason_type = "safe"
