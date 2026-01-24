@@ -1,3 +1,4 @@
+// extension/popup.js
 const API_BASE_URL = "https://jonell-ardeid-interpervasively.ngrok-free.dev";
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -6,19 +7,28 @@ document.addEventListener('DOMContentLoaded', function() {
     if (btn) {
         btn.addEventListener('click', async () => {
             try {
-                // 1. Fetch the JSON from your existing API
-                const response = await fetch(`${API_BASE_URL}/login`);
-                const data = await response.json();
-                
-                // 2. Extract the URL string from the JSON object
-                if (data.auth_url) {
-                    console.log("Redirecting to Google...");
-                    chrome.tabs.create({ url: data.auth_url });
+                const response = await fetch(`${API_BASE_URL}/login`, {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json',
+                        'ngrok-skip-browser-warning': 'true'
+                    }
+                });
+
+                // Debug: Check if we actually got a JSON response
+                const contentType = response.headers.get("content-type");
+                if (contentType && contentType.includes("application/json")) {
+                    const data = await response.json();
+                    if (data.auth_url) {
+                        chrome.tabs.create({ url: data.auth_url });
+                    }
                 } else {
-                    console.error("Invalid response format:", data);
+                    // This will log the HTML that's causing the crash
+                    const text = await response.text();
+                    console.error("Received HTML instead of JSON. Check ngrok warning:", text.substring(0, 100));
                 }
             } catch (error) {
-                console.error("Connection failed. Is the backend/ngrok running?", error);
+                console.error("Connection failed:", error);
             }
         });
     }
