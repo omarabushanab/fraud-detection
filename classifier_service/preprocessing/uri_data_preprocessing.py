@@ -44,12 +44,62 @@ def uri_data_preprocessing():
     df.drop_duplicates(subset="domain", inplace=True)
     df = df[df["domain"].str.len() > 10]
 
-    df_mal = df[df["label"] == 1].sample(40000, random_state=42)
-    df_ben = df[df["label"] == 0].sample(40000, random_state=42)
+    # -------------------------------
+    # Split datasets
+    # -------------------------------
 
-    final_df = pd.concat([df_mal, df_ben])
-    final_df = final_df.sample(frac=1).reset_index(drop=True)
+    df_phishing = df[df["label"] == 1]
+    df_benign_all = df[df["label"] == 0]
+
+    # ---- Mandatory benign subset: ALL Tranco ----
+    df_tranco_only = df_tranco.copy()
+    df_tranco_only["domain"] = df_tranco_only["domain"].str.lower().str.strip()
+
+    # Keep only tranco domains that survived deduplication
+    df_tranco_only = df_tranco_only[
+        df_tranco_only["domain"].isin(df_benign_all["domain"])
+    ]
+
+    n_tranco = len(df_tranco_only)
+    print(f"Guaranteed Tranco benign: {n_tranco}")
+
+    # ---- Additional benign (non-Tranco) ----
+    df_other_benign = df_benign_all[
+        ~df_benign_all["domain"].isin(df_tranco_only["domain"])
+    ]
+
+    # We want total benign == phishing
+    # So benign size determines phishing size
+    df_benign_final = pd.concat([df_tranco_only, df_other_benign])
+
+    n_benign = len(df_benign_final)
+    print(f"Total benign (Tranco + others): {n_benign}")
+
+    # ---- Match phishing to benign count ----
+    if len(df_phishing) < n_benign:
+        raise ValueError(
+            f"Not enough phishing samples ({len(df_phishing)}) "
+            f"to match benign count ({n_benign})"
+        )
+
+    df_phishing_final = df_phishing.sample(
+        n=n_benign,
+        random_state=42
+    )
+
+    # -------------------------------
+    # Final balanced dataset
+    # -------------------------------
+
+    final_df = pd.concat([df_benign_final, df_phishing_final])
+    final_df = final_df.sample(frac=1, random_state=42).reset_index(drop=True)
+
     final_df.to_csv("datasets/domains.csv", index=False)
+
+    print("Final dataset size:", final_df.shape)
+    print("Benign:", (final_df["label"] == 0).sum())
+    print("Phishing:", (final_df["label"] == 1).sum())
+
 
     X = final_df["domain"].apply(extract_domain_features).apply(pd.Series)
     y = final_df["label"]

@@ -3,7 +3,7 @@ from preprocessing.uri_data_preprocessing import uri_data_preprocessing
 import joblib
 import numpy as np
 
-MODEL_PATH = "models/uri_lgbm_model_domain.joblib"
+MODEL_PATH = "models/uri_lgbm_model_domain_new.joblib"
 model = joblib.load(MODEL_PATH)
 
 X_train, X_val, y_train, y_val = uri_data_preprocessing()

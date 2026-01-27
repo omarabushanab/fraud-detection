@@ -1,5 +1,6 @@
 import time
 import pandas as pd
+from models.safe_browsing_api import check_google_safe_browsing
 from preprocessing.uri_feature_extractor import extract_features,extract_domain_features, canonicalize_domain
 import joblib
 from cache.uri_cache import get_cached_uri, cache_uri_result
@@ -21,41 +22,61 @@ def load_model():
 def predict_url(url, threshold=0.72):
     model = load_model()
 
-     # 1️⃣ Check cache
-    cached = get_cached_uri(url)
+    # 1️⃣ Cache check (canonicalized!)
+    cached = get_cached_uri(canonicalize_domain(url))
     if cached:
         cached["source"] = "cache"
-        print("Cache hit")
         return cached
 
-    # Extract features
+    # 2️⃣ Google Safe Browsing
+    gsb_result = check_google_safe_browsing(url)
+
+    if gsb_result == "MALICIOUS":
+        result = {
+            "url": url,
+            "prediction": "PHISHING",
+            "probability": 1.0,
+            "source": "google_safe_browsing"
+        }
+        cache_uri_result(canonicalize_domain(url), result)
+        return result
+
+    if gsb_result == "CLEAN":
+        result = {
+            "url": url,
+            "prediction": "BENIGN",
+            "probability": 0.0,
+            "source": "google_safe_browsing"
+        }
+        cache_uri_result(canonicalize_domain(url), result)
+        return result
+
+    # 3️⃣ ML fallback
     features = extract_domain_features(canonicalize_domain(url))
     X = pd.DataFrame([features])
 
     prob = model.predict_proba(X)[0, 1]
-    pred = int(prob >= threshold)
+    pred = prob >= threshold
 
     result = {
         "url": url,
-        "prediction": "PHISHING" if pred == 1 else "BENIGN",
+        "prediction": "PHISHING" if pred else "BENIGN",
         "probability": float(prob),
         "threshold": threshold,
         "source": "model"
     }
 
-    # 3️⃣ Cache result
-    cache_uri_result(url, result)
-
+    cache_uri_result(canonicalize_domain(url), result)
     return result
 
 
-# test_url = input("Enter a URL to classify: ")
-# result = predict_url(test_url)
+test_url = input("Enter a URL to classify: ")
+result = predict_url(test_url)
 @app.post("/classify_url")
 def classify_url(request: URLRequest):
     return predict_url(request.url)
 
-# print("===== URI INFERENCE RESULT =====")
-# print(result)
-# print("================================")
+print("===== URI INFERENCE RESULT =====")
+print(result)
+print("================================")
 

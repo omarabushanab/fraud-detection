@@ -68,10 +68,25 @@ def extract_domain_features(domain):
 
     return features
 
-def canonicalize_domain(url):
-    try:
-        parsed = urlparse(url)
-        domain = parsed.hostname or ""
-        return domain.lower()
-    except:
+def canonicalize_domain(url: str) -> str:
+    if not url:
         return ""
+
+    url = url.strip().lower()
+
+    # Ensure scheme exists
+    if not url.startswith(("http://", "https://")):
+        url = "http://" + url
+
+    parsed = urlparse(url)
+
+    domain = parsed.netloc
+
+    # Remove port
+    domain = domain.split(":")[0]
+
+    # Remove leading www
+    if domain.startswith("www."):
+        domain = domain[4:]
+
+    return domain

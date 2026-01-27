@@ -24,19 +24,19 @@ def train_model():
     model.fit(X_train, y_train)
 
     # Plot the first tree
-    lgb.plot_tree(
-        model,
-        tree_index=0,          # which tree
-        figsize=(20, 10),
-        show_info=["split_gain", "internal_value", "leaf_count"]
-    )
+    # lgb.plot_tree(
+    #     model,
+    #     tree_index=0,          # which tree
+    #     figsize=(20, 10),
+    #     show_info=["split_gain", "internal_value", "leaf_count"]
+    # )
 
-    plt.show()
+    # plt.show()
 
     # Create models directory
-    Path("artifacts").mkdir(exist_ok=True)
+    # Path("artifacts").mkdir(exist_ok=True)
 
     # Save model
-    joblib.dump(model, "core/models/uri_lgbm_model_domain.joblib")
+    joblib.dump(model, "models/uri_lgbm_model_domain_new.joblib")
 
-    print("Model saved to core/models/uri_lgbm_model_domain.joblib")
+    print("Model saved to models/uri_lgbm_model_domain_new.joblib")
