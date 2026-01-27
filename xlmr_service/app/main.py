@@ -29,7 +29,7 @@ app.add_middleware(
 # Allow override via env (useful if model is mounted instead of baked in)
 MODEL_PATH = os.getenv(
     "MODEL_DIR",
-    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "model", "xlm-r-phishing-final")),
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "model", "xlm-r-phishing-final-4")),
 )
 
 if not os.path.exists(MODEL_PATH):
@@ -46,8 +46,12 @@ class TextURLRequest(BaseModel):
     text: str
     urls: list[str]
 
+class BatchItem(BaseModel):
+    text: str
+    urls: list[str]
+
 class BatchRequest(BaseModel):
-    texts: list[str]
+    items: list[BatchItem]
 
 @app.get("/health")
 def health():
@@ -64,7 +68,7 @@ async def predict(req: TextURLRequest):
 
 @app.post("/predict_batch")
 async def predict_batch(req: BatchRequest):
-    return await predictor.predict_batch(req.texts)
+    return await predictor.predict_batch(req.items)
 
 @app.post("/analyze_full")
 async def analyze_full(req: TextRequest):

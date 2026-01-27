@@ -48,7 +48,9 @@ def predict_url(url, threshold=0.72):
 
     return result
 
-
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
 # test_url = input("Enter a URL to classify: ")
 # result = predict_url(test_url)
 @app.post("/classify_url")
