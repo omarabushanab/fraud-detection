@@ -78,7 +78,7 @@ def health_check():
 def classify_url(request: URLRequest):
     return predict_url(request.url)
 
-print("===== URI INFERENCE RESULT =====")
-print(result)
-print("================================")
+#print("===== URI INFERENCE RESULT =====")
+#print(result)
+#print("================================")
 
