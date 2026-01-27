@@ -362,6 +362,18 @@ async def gmail_push(request: Request):
             for h in history_response["history"]:
                 for added in h.get("messagesAdded", []):
                     msg_id = added["message"]["id"]
+                    try:
+                        msg_data = service.users().messages().get(userId="me", id=msg_id, format="minimal").execute()
+                        labels = msg_data.get("labelIds", [])
+
+                        if "INBOX" not in labels:
+                            print(f"ℹ️ Message {msg_id} for {email_address} is not in INBOX. Skipping.")
+                            continue
+                    except Exception as e:
+                        print(f"❌ could not verify labels for {msg_id} for {email_address}: {e}")
+                        continue
+                   
+                   
                     is_duplicate = await db.get(f"processed:{msg_id}:{email_address}")
                     if is_duplicate:
                         print(f"⚠️ Message {msg_id} for {email_address} already queued. Skipping duplicate.")
@@ -481,7 +493,8 @@ async def oauth_callback(code: str):
 
     # Save the real token and setup watching in Redis
     await db.set(f"token:{email}", creds.to_json())
-    
+    asyncio.create_task(processing_worker(email))
+
     gmail_service = build('gmail', 'v1', credentials=creds)
     gmail_service.users().watch(
         userId='me', 
