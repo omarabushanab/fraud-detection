@@ -7,7 +7,13 @@ services:
     ports:
       - "8001:8001"
     environment:
-      - MODEL_DIR=/app/model/xlm-r-phishing-final
+      - MODEL_DIR=/app/model/xlm-r-phishing-final-4
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
  
   classifier_service:
     build: ./classifier_service
@@ -23,6 +29,11 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
 
   gmail_service:
@@ -38,11 +49,9 @@ services:
       - "8002:8002"
     depends_on:
       xlmr_service:
-        condition: service_started
+        condition: service_healthy
       redis:
         condition: service_healthy
-
-  
 
   redis:
     image: redis:7

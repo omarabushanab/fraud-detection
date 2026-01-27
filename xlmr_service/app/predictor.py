@@ -30,20 +30,30 @@ class XLMRPredictor:
         )
         self.explainer = shap.Explainer(self.explainer_pipeline)
 
+    # predictor.py
     def explain(self, text):
         shap_values = self.explainer([text])
         tokens = shap_values.data[0]
-        values = shap_values.values[0][:, 1]  # Get SHAP values for the 'phishing' class
-        # Get words with high impact (positive SHAP values)
-        triggers = [tokens[i].strip() for i, val in enumerate(values) if val > 0.05]
+        values = shap_values.values[0][:, 1]
+        
+        # Filter for impact > 0.05 and ignore tokens shorter than 3 chars
+        triggers = [
+            tokens[i].replace('Ġ', '').strip() 
+            for i, val in enumerate(values) 
+            if val > 0.05 and len(tokens[i].replace('Ġ', '').strip()) > 2
+        ]
         return list(set(triggers))
     
-    async def predict(self, text: str):
-        url = None
-        # extract urls if any
+    async def predict_for_analyze(self, text: str):
+        # Extract URLs from text
         extractor = URLExtract()
         urls = extractor.find_urls(text)
+        print("these are the urls found by the extension:", urls)
+        return await self.predict(text, urls)
+
+    async def predict(self, text: str, urls: list[str] = []):
         print("Extracted URLs:", urls)
+        url = None
         for u in urls:
             url = u
             async with httpx.AsyncClient() as client:
@@ -95,30 +105,75 @@ class XLMRPredictor:
             "confidence": round(confidence, 4)
         }
     
-    async def predict_batch(self, texts: list[str]):
+
+    async def predict_batch(self, items: list):
         # 1. Batch Tokenization (Efficient)
-        inputs = self.tokenizer(
-            texts, 
-            return_tensors="pt", 
-            truncation=True, 
-            padding=True, # Critical for batching
-            max_length=512
-        ).to(self.device)
+        """
+        items is a list of objects/dicts: [{"text": "...", "urls": [...]}, ...]
+        Docstring for predict_batch
+        
+        :param self: Description
+        :param items: Description
+        :type items: list
+        """
+        async with httpx.AsyncClient() as client:
 
-        with torch.no_grad():
-            outputs = self.model(**inputs)
-            probs = torch.softmax(outputs.logits, dim=-1)
+            results = [None] * len(items)
+            texts_to_ml = []
+            ml_indices = []
 
-        results = []
-        for i in range(len(texts)):
-            safe_prob = probs[i][0].item()
-            phishing_prob = probs[i][1].item()
-            
-            label = "phishing" if phishing_prob >= 0.5 else "safe"
-            confidence = phishing_prob if label == "phishing" else safe_prob
-            
-            results.append({
+            for i, item in enumerate(items):
+
+                found_phishihng_url = False
+                current_url = item.urls if hasattr(item, 'urls') else item.get("urls", [])
+                
+                for url in current_url:
+                        try:
+                            response = await client.post(
+                                CLASSIFIER_SERVICE_URL,
+                                json={"url": url},
+                                timeout=10.0
+                            )
+                            data = response.json()
+
+                            if data["prediction"] == "PHISHING":
+                                results[i] = {
+                                    "url": url,
+                                    "reason": f"Caught by URL: {url}",
+                                    "label": "phishing",
+                                    "confidence": round(data["probability"], 4),
+                                }
+                                found_phishihng_url = True
+                                break
+                        except Exception as e:
+                            print(f"URL classifier error for {url}: {e}")
+                if not found_phishihng_url:
+                    texts_to_ml.append(item.text if hasattr(item, 'text') else item.get("text", ""))
+                    ml_indices.append(i)
+    
+
+        if texts_to_ml:
+            inputs = self.tokenizer(
+                texts_to_ml, 
+                return_tensors="pt", 
+                truncation=True, 
+                padding=True, # Critical for batching
+                max_length=512
+            ).to(self.device)
+
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+                probs = torch.softmax(outputs.logits, dim=-1)
+
+            for i, original_index in enumerate(ml_indices):
+                safe_prob = probs[i][0].item()
+                phishing_prob = probs[i][1].item()
+                
+                label = "phishing" if phishing_prob >= 0.5 else "safe"
+                results[original_index] = {
                 "label": label,
-                "confidence": round(confidence, 4)
-            })
+                "confidence": round(phishing_prob if label == "phishing" else safe_prob, 4),
+                "reason": "Analyzed by XLM-R Model"
+            }
+                
         return results

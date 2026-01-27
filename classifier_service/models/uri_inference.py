@@ -69,9 +69,11 @@ def predict_url(url, threshold=0.72):
     cache_uri_result(canonicalize_domain(url), result)
     return result
 
-
-test_url = input("Enter a URL to classify: ")
-result = predict_url(test_url)
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
+# test_url = input("Enter a URL to classify: ")
+# result = predict_url(test_url)
 @app.post("/classify_url")
 def classify_url(request: URLRequest):
     return predict_url(request.url)
