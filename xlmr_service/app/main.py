@@ -70,7 +70,7 @@ async def predict(req: TextURLRequest):
 async def predict_batch(req: BatchRequest):
     return await predictor.predict_batch(req.items)
 
-@app.post("/analyze_full")
+@app.post("/analyze-full")
 async def analyze_full(req: TextRequest):
     # 1. Run the prediction (which checks URLs first, then XLM-R)
     result = await predictor.predict_for_analyze(req.text)
