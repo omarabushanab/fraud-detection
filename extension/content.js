@@ -7,9 +7,18 @@ function injectWarning(reason, detail) {
     banner.id = 'phish-guard-banner';
     banner.style = "background: #fee2e2; border: 2px solid #ef4444; padding: 15px; margin: 10px; border-radius: 8px; color: #991b1b; font-family: sans-serif;";
     
-    const message = reason === 'url' 
-        ? `⚠️ <strong>High Risk:</strong> This email contains a blacklisted URL: <code style="background:#fca5a5; padding:2px;">${detail}</code>`
-        : `⚠️ <strong>AI Analysis:</strong> Our XLM-R model detected suspicious patterns in the text (highlighted in red).`;
+    let message = "";
+        if (reason === 'url') {
+            message = `⚠️ <strong>High Risk:</strong> Malicious URL detected: <code>${detail}</code>`;
+        } else if (reason === 'attachment') {
+            message = `⚠️ <strong>Virus Alert:</strong> Malicious attachment detected. Do not download or open files in this email!`;
+        } else {
+            message = `⚠️ <strong>AI Analysis:</strong> Our XLM-R model detected suspicious patterns in the text.`;
+        }
+  
+        // const message = reason === 'url' 
+    //     ? `⚠️ <strong>High Risk:</strong> This email contains a blacklisted URL: <code style="background:#fca5a5; padding:2px;">${detail}</code>`
+    //     : `⚠️ <strong>AI Analysis:</strong> Our XLM-R model detected suspicious patterns in the text (highlighted in red).`;
     
     banner.innerHTML = message;
     emailHeader.prepend(banner);
@@ -52,6 +61,9 @@ async function checkAndHighlight() {
     const emailBody = document.querySelector('.a3s.aiL');
     if (!emailBody || emailBody.dataset.explained === "true") return;
     
+    const hashParts = window.location.hash.split('/');
+    const msgId = hashParts[hashParts.length - 1];
+
     isAnalyzing = true;
     console.log("Analyzing malicious email...");
     console.log("Email body text:", emailBody.innerText);
@@ -62,13 +74,16 @@ async function checkAndHighlight() {
             headers: {
                 'Content-Type': 'application/json',
                 'ngrok-skip-browser-warning': 'true'},
-            body: JSON.stringify({ email: emailBody.innerText })
+            body: JSON.stringify({
+                 email: emailBody.innerText,
+                 message_id: msgId
+            })
         });
         
         const data = await response.json();
         if (data.label !== "phishing") return;
 
-        injectWarning(data.reason_type, data.malicious_url);
+        injectWarning(data.reason_type, data.malicious_url || data.filename);
 
         let html = emailBody.innerHTML;
 

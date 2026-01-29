@@ -3,6 +3,7 @@ import base64
 import json
 import os
 import pickle
+from urllib import response
 import fitz  # PyMuPDF
 import io
 from fastapi import FastAPI, Request, Form
@@ -68,6 +69,7 @@ db = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379"),
 
 class EmailRequest(BaseModel):
     email: str
+    message_id: str = None
 
 html_content = ""
 # HTML template embedded in the code
@@ -169,6 +171,17 @@ def get_attachment_text(service, msg_id, parts):
             attachment_texts.extend(get_attachment_text(service, msg_id, part['parts']))
             
     return " ".join(attachment_texts)
+
+async def scan_attachment_service(filename, raw_data):
+    ATTACHMENT_SERVICE_URL = "http://attachment_service:8004/scan"
+    async with httpx.AsyncClient() as client:
+        try:
+            files = {'file': (filename, raw_data)}
+            response = await client.post(ATTACHMENT_SERVICE_URL, files=files, timeout=30.0)
+            return response.json()
+        except Exception as e:
+            print(f"Connection error to attachment service: {e}")
+            return {"is_malicious": False}
 
 def get_parts_content(service, msg_id, payload):
     parts_to_classify = []
@@ -417,6 +430,38 @@ async def processing_worker(email_address: str):
             for mid in msg_ids:
                 try:
                     email = service.users().messages().get(userId="me", id=mid).execute()
+                    payload = email['payload']
+
+                    is_malicious_attachment = False
+
+                    async def scan_all_attachments(parts):
+                        nonlocal is_malicious_attachment
+                        for part in parts:
+                            if part.get('filename') and 'attachmentId' in part['body']:
+
+                                att = service.users().messages().attachments().get(
+                                    userId = 'me', messageId = mid, id = part['body']['attachmentId']
+                                ).execute()
+                                raw_data = base64.urlsafe_b64decode(att['data'])
+
+                                scan_res = await scan_attachment_service(part['filename'], raw_data)
+
+                                if scan_res.get("is_malicious"):
+
+                                    await db.setex(f"scan_result:{mid}", 86400, json.dumps(scan_res))
+                                    is_malicious_attachment = True
+                                    return
+                                
+                        if 'parts' in part:
+                            await scan_all_attachments(part['parts'])
+                    
+                    if 'parts' in payload:
+                        await scan_all_attachments(payload['parts'])
+                    
+                    if is_malicious_attachment:
+                        print(f"Malware found in attachment for {mid}. Moving to malicious folder.")
+                        move_to_malicious(service, mid, malicious_label_id)
+                        continue
                     urls = extract_all_uris(service, mid, email['payload'])
 
                     batch_items.append({
@@ -531,11 +576,38 @@ async def classify_email(request: EmailRequest):
 
 @app.post("/analyze-full")
 async def proxy_analyze_full(req: EmailRequest):
+
+    final_result = {
+        "label": "safe",
+        "reason_type": "safe",
+        "malicious_url": None,
+        "filename": None,
+        "triggers": []
+    }
+
+    if req.message_id:
+        saved_scan = await db.get(f"scan_result:{req.message_id}")
+        if saved_scan:
+            scan_data = json.loads(saved_scan)
+            if scan_data.get("is_malicious"):
+                return {
+                    "label": "phishing",
+                    "reason_type": "attachment",
+                    "filename": scan_data.get("filename"),
+                    "triggers": scan_data.get("findings", [])
+                }
     async with httpx.AsyncClient() as client:
         # Forward the request to the internal xlmr_service
-        explainer_service_url = os.getenv("EXPLAINER_URL", "http://xlmr_service:8001/analyze-full")
-        response = await client.post(explainer_service_url, json={"text": req.email}, timeout=20.0)
-        return response.json()
+        try:
+            explainer_service_url = os.getenv("EXPLAINER_URL", "http://xlmr_service:8001/analyze-full")
+            response = await client.post(explainer_service_url, json={"text": req.email}, timeout=20.0)
+            xlmr_data = response.json()
+
+            final_result.update(xlmr_data)
+        except Exception as e:
+            print(f"XLM-R Service Error: {e}")
+
+    return final_result
 
 # ======================
 # RUN SERVER

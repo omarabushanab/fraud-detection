@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+python-multipart
+python-magic
+oletools
+httpx
+clamd
