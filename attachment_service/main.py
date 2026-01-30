@@ -6,8 +6,46 @@ from oletools.olevba import VBA_Parser
 import clamd
 import os
 import time
+import zipfile
 
 MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB
+
+async def analyze_bytes(filename, contents):
+    """The logic moved here so it can be called recursively"""
+    is_malicious = False
+    findings = []
+    
+    # 1. Detect MIME
+    try:
+        mime = magic.from_buffer(contents, mime=True)
+    except:
+        mime = "application/octet-stream"
+    
+    # 2. ClamAV Scan
+    try:
+        cd = get_clamd()
+        scan_result = cd.instream(io.BytesIO(contents))
+        if scan_result and scan_result.get('stream', [None])[0] == 'FOUND':
+            is_malicious = True
+            findings.append(f"ClamAV: {scan_result['stream'][1]}")
+    except Exception as e:
+        print(f"ClamAV failed: {e}")
+
+    # 3. VBA Macro Scan
+    office_mimes = ["officedocument", "msword", "excel", "ms-office", "powerpoint"]
+    if any(m in mime for m in office_mimes):
+        try:
+            vba_parser = VBA_Parser(filename=filename, data=contents)
+            if vba_parser.detect_macros():
+                for (kw_type, keyword, description) in vba_parser.analyze_macros():
+                    if kw_type in ['Suspicious', 'AutoExec']:
+                        is_malicious = True
+                        findings.append(f"{kw_type}: {keyword} ({description})")
+            vba_parser.close()
+        except:
+            pass
+
+    return is_malicious, findings, mime
 
 def get_clamd():
     """
@@ -31,6 +69,55 @@ def get_clamd():
             else:
                 raise Exception(f"Failed to connect to ClamAV after {max_retries} attempts: {e}")
 
+async def analyze_recursive(filename, contents, depth = 0):
+    if depth > 5:
+        return False, [f"Max recursion depth reached for {filename}"], "application/octet-stream"
+    findings = []
+    is_malicious = False
+
+    try:
+        mime = magic.from_buffer(contents, mime=True)
+    except:
+        mime = "application/octet-stream"
+    if mime == "application/zip" or filename.endswith(".zip"):
+        try:
+            with zipfile.ZipFile(io.BytesIO(contents)) as z:
+                for zinfo in z.infolist():
+                    if zinfo.is_dir():
+                        continue
+                    with z.open(zinfo) as f:
+                        child_contents = f.read()
+                        child_malicious, child_findings, _ = await analyze_recursive(zinfo.filename, child_contents, depth + 1)
+
+                        if child_malicious:
+                            is_malicious = True
+                            findings.extend([f"[{zinfo.filename}] {found}" for found in child_findings])
+            return is_malicious, list(set(findings)), mime # Use set to avoid duplicates
+        except Exception as e:
+            return False, [f"Zip Error: {str(e)}"], mime
+    try:
+        cd = get_clamd()
+        scan_result = cd.instream(io.BytesIO(contents))
+        if scan_result and scan_result.get('stream', [None])[0] == 'FOUND':
+            is_malicious = True
+            findings.append(f"ClamAV: {scan_result['stream'][1]}")
+    except Exception as e:
+        print(f"ClamAV failed: {e}")
+
+    office_mimes = ["officedocument", "msword", "excel", "ms-office", "powerpoint"]
+    if any(m in mime for m in office_mimes):
+        try:
+            vba_parser = VBA_Parser(filename=filename, data=contents)
+            if vba_parser.detect_macros():
+                for (kw_type, keyword, description) in vba_parser.analyze_macros():
+                    if kw_type in ['Suspicious', 'AutoExec']:
+                        is_malicious = True
+                        findings.append(f"{kw_type}: {keyword} ({description})")
+            vba_parser.close()
+        except:
+            pass
+    return is_malicious, findings, mime
+
 app = FastAPI()
 
 @app.post("/scan")
@@ -47,8 +134,16 @@ async def scan_file(file: UploadFile = File(...)):
     
     # Read file contents
     contents = await file.read()
-    
+    is_malicious, findings, mime = await analyze_recursive(file.filename, contents)
+    return {
+        "filename": file.filename,
+        "mime_type": mime,
+        "is_malicious": is_malicious,
+        "findings": findings
+    }
+
     # Verify we actually have content
+async def perform_analysis(filename, contents):
     if not contents:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -68,7 +163,7 @@ async def scan_file(file: UploadFile = File(...)):
     # 2. Check for Malicious Office Macros (olevba)
     if "officedocument" in mime or "msword" in mime or "excel" in mime or "ms-office" in mime:
         try:
-            vba_parser = VBA_Parser(filename=file.filename, data=contents)
+            vba_parser = VBA_Parser(filename=filename, data=contents)
             if vba_parser.detect_macros():
                 results = vba_parser.analyze_macros()
                 for (kw_type, keyword, description) in results:
@@ -96,7 +191,7 @@ async def scan_file(file: UploadFile = File(...)):
         # Just log it and continue
     
     return {
-        "filename": file.filename,
+        "filename": filename,
         "mime_type": mime,
         "is_malicious": is_malicious,
         "findings": findings
