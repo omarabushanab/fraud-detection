@@ -1,4 +1,3 @@
-
 services:
   xlmr_service:
     build: ./xlmr_service
@@ -13,7 +12,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 20s
+      start_period: 30s
  
   classifier_service:
     build: ./classifier_service
@@ -34,7 +33,47 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+      start_period: 20s
 
+  clamav:
+    image: clamav/clamav:latest
+    restart: always
+    healthcheck:
+      test: ["CMD", "sh", "-c", "echo PING | nc localhost 3310 | grep PONG"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 300s  # ClamAV needs ~3-5 minutes to load virus definitions
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+  attachment_service:
+    build: ./attachment_service
+    ports:
+      - "8004:8004"
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          memory: 256M
+    environment:
+      - CLAMAV_HOST=clamav
+      - CLAMD_PORT=3310
+    depends_on:
+      clamav:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 20s
+      timeout: 15s
+      retries: 15
+      start_period: 120s  # Give ClamAV time to fully start
 
   gmail_service:
     build: ./gmail_service
@@ -52,31 +91,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-  
-  attachment_service:
-    build: ./attachment_service
-    ports:
-      - "8004:8004"
-    deploy:
-      resources:
-        limits:
-          cpus: '0.50'
-          memory: 512M
-        reservations:
-          memory: 128M
-    environment:
-      - CLAMAV_HOST=clamav # Added to link the two
-    depends_on:
-      clamav:
+      attachment_service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
-
-  clamav:
-    image: clamav/clamav:latest
-    restart: always
-    healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "3310"]
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -88,7 +106,6 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    # We add --appendonly yes for better persistence and --dir /data to match the volume
     command: ["redis-server", "--appendonly", "yes", "--dir", "/data", "--protected-mode", "no", "--save", "60", "1"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -96,8 +113,6 @@ services:
       timeout: 3s
       retries: 5
     restart: always
-  
-
 
 volumes:
   redis_data:
