@@ -265,37 +265,63 @@ def get_parts_content(service, msg_id, payload):
     
     return parts_to_classify
 
+
 def extract_all_uris(service, msg_id, payload):
     """
-    Recursively extract all URIs from email parts (text/plain, text/html).
+    Extracts all clickable/embedded URIs from the email body (HTML) 
+    and from inside PDF attachments.
     """
-    all_uris = []
+    all_uris = set()
+    # Regex to catch plain-text URLs that aren't wrapped in <a> tags
+    url_regex = r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+'
 
     def walk_parts(parts):
         for part in parts:
-            mime_type = part.get('mimeType', '')
+            mime_type = part.get('mimeType')
             body = part.get('body', {})
-            data = body.get('data')
+            filename = part.get('filename', '')
 
-            # Decode text content
-            if data and (mime_type == 'text/plain' or mime_type == 'text/html'):
-                decoded = base64.urlsafe_b64decode(data).decode('utf-8', errors='ignore')
-                
-                # Extract URLs using regex
-                # This pattern captures http/https URLs
-                url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
-                found = re.findall(url_pattern, decoded)
-                all_uris.extend(found)
-            
-            # Recurse into nested parts
+            # --- 1. SCAN HTML BODY ---
+            if mime_type == 'text/html' and 'data' in body:
+                raw_html = base64.urlsafe_b64decode(body['data']).decode('utf-8', errors='ignore')
+                soup = BeautifulSoup(raw_html, 'html.parser')
+                # Extract actual 'href' destinations
+                for a in soup.find_all('a', href=True):
+                    href = a['href']
+                    if href.startswith('mailto:'):
+                        continue
+                    all_uris.add(href)
+                # Also run regex to catch raw text links in HTML
+                all_uris.update(re.findall(url_regex, raw_html))
+
+            # --- 2. SCAN PDF EMBEDDED LINKS ---
+            elif filename.lower().endswith('.pdf') and 'attachmentId' in body:
+                try:
+                    attachment = service.users().messages().attachments().get(
+                        userId='me', messageId=msg_id, id=body['attachmentId']).execute()
+                    pdf_data = base64.urlsafe_b64decode(attachment['data'])
+                    
+                    with fitz.open(stream=io.BytesIO(pdf_data), filetype="pdf") as doc:
+                        for page in doc:
+                            # This is the critical part for "hidden" hacking links
+                            for link in page.get_links():
+                                if 'uri' in link:
+                                    all_uris.add(link['uri'])
+                            
+                            # Also check text for written-out URLs
+                            all_uris.update(re.findall(url_regex, page.get_text()))
+                except Exception as e:
+                    print(f"❌ Error scanning PDF {filename}: {e}")
+
             if 'parts' in part:
                 walk_parts(part['parts'])
 
     if 'parts' in payload:
         walk_parts(payload['parts'])
-    
-    return list(set(all_uris))  # Remove duplicates
+    elif 'body' in payload:
+        walk_parts([payload])
 
+    return list(all_uris)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
