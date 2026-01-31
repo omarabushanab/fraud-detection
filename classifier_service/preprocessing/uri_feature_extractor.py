@@ -1,6 +1,7 @@
 import re
 import math
 from urllib.parse import urlparse
+from playwright.sync_api import sync_playwright, TimeoutError
 
 SUSPICIOUS_WORDS = [
     "login", "secure", "account", "verify",
@@ -8,6 +9,66 @@ SUSPICIOUS_WORDS = [
 ]
 
 IP_REGEX = re.compile(r"\d+\.\d+\.\d+\.\d+")
+
+import requests
+
+def resolve_redirects(url, max_redirects=10, timeout=5):
+    """
+    Expand a shortened URL to its final destination.
+    
+    Args:
+        url: The URL to expand
+        max_redirects: Maximum number of redirects to follow
+        timeout: Request timeout in seconds
+    
+    Returns:
+        The final expanded URL, or original URL if expansion fails
+    """
+    try:
+        # Some services require a user agent
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        # Create a session to set max_redirects
+        session = requests.Session()
+        session.max_redirects = max_redirects
+        
+        response = session.head(
+            url,
+            allow_redirects=True,
+            timeout=timeout,
+            headers=headers
+        )
+        
+        return response.url
+        
+    except requests.TooManyRedirects:
+        print(f"Too many redirects for {url}")
+        return url
+    except requests.Timeout:
+        print(f"Timeout expanding {url}")
+        return url
+    except requests.RequestException as e:
+        # If HEAD fails, try GET (some servers don't support HEAD)
+        try:
+            session = requests.Session()
+            session.max_redirects = max_redirects
+            
+            response = session.get(
+                url,
+                allow_redirects=True,
+                timeout=timeout,
+                headers=headers,
+                stream=True  # Don't download body
+            )
+            return response.url
+        except:
+            print(f"Failed to expand {url}: {e}")
+            return url
+
+
+
 
 def shannon_entropy(s):
     if not s:
