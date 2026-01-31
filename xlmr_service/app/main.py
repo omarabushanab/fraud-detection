@@ -2,7 +2,7 @@ import os
 
 from fastapi import FastAPI
 from pydantic import BaseModel
-from fastapi.middleware.cors import CORSMiddleware  #
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.predictor import XLMRPredictor
 
@@ -44,11 +44,13 @@ class TextRequest(BaseModel):
 
 class TextURLRequest(BaseModel):
     text: str
-    urls: list[str]
+    urls: list[str] = []
+    html: str | None = None
 
 class BatchItem(BaseModel):
     text: str
-    urls: list[str]
+    urls: list[str] = []
+    html: str | None = None
 
 class BatchRequest(BaseModel):
     items: list[BatchItem]
@@ -64,16 +66,36 @@ def explain(req: TextRequest):
 
 @app.post("/predict")
 async def predict(req: TextURLRequest):
-    return await predictor.predict(req.text, req.urls)
+    # Use direct attribute access for Pydantic objects
+    return await predictor.predict(
+        text = req.text,
+        urls = req.urls if req.urls else [],
+        raw_html = getattr(req, 'html', None) # Safely get html if added later
+    )
 
 @app.post("/predict_batch")
 async def predict_batch(req: BatchRequest):
-    return await predictor.predict_batch(req.items)
+    results = await predictor.predict_batch(req.items)
+
+    # Ensure triggers exists but do not compute SHAP here (performance)
+    for res in results:
+        if "triggers" not in res:
+            res["triggers"] = []
+    return results
+
 
 @app.post("/analyze-full")
-async def analyze_full(req: TextRequest):
+async def analyze_full(req: TextURLRequest):
+    """
+    Full analysis endpoint that returns structured explanation data.
+    This is called by both the gmail service and the browser extension.
+    """
     # 1. Run the prediction (which checks URLs first, then XLM-R)
-    result = await predictor.predict_for_analyze(req.text)
+    result = await predictor.predict(
+        text=req.text, 
+        urls=req.urls if req.urls else [], 
+        raw_html=req.html
+    )
     
     explanation = []
     reason_type = "safe"
@@ -83,13 +105,19 @@ async def analyze_full(req: TextRequest):
         if result.get("url") and result["url"].strip():
             reason_type = "url"
         else:
-            # 3. If no malicious URL, get SHAP triggers for XLM-R
-            reason_type = "xlmr"
-            explanation = predictor.explain(req.text)
+            # 3. If no malicious URL, determine if it was XLM-R or LLM
+            if "LLM:" in result.get("reason", ""):
+                reason_type = "llm"
+            else:
+                reason_type = "xlmr"
+                # Get SHAP triggers for XLM-R classifications
+                explanation = predictor.explain(req.text)
         
     return {
         "label": result["label"],
-        "reason_type": reason_type, # "url" or "xlmr"
+        "reason_type": reason_type,  # "url", "xlmr", "llm", or "safe"
+        "reason": result.get("reason", ""),
+        "confidence": result.get("confidence", 0.0),
         "malicious_url": result.get("url"),
         "triggers": explanation
     }

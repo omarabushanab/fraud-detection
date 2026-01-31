@@ -13,3 +13,6 @@ numpy<2.0.0
 shap
 urlextract
 httpx
+google-genai
+beautifulsoup4
+python-dotenv
