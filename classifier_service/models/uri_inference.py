@@ -1,7 +1,7 @@
 import time
 import pandas as pd
 from models.safe_browsing_api import check_google_safe_browsing
-from preprocessing.uri_feature_extractor import extract_features,extract_domain_features, canonicalize_domain
+from preprocessing.uri_feature_extractor import extract_features,extract_domain_features, canonicalize_domain, resolve_redirects
 import joblib
 from cache.uri_cache import get_cached_uri, cache_uri_result
 from fastapi import FastAPI
@@ -22,13 +22,18 @@ def load_model():
 def predict_url(url, threshold=0.72):
     model = load_model()
 
-    # 1️⃣ Cache check (canonicalized!)
-    cached = get_cached_uri(canonicalize_domain(url))
+    url = resolve_redirects(url)
+    print(f"Resolved URL: {url}")
+
+    canonical = canonicalize_domain(url)
+
+    # 1️⃣ Cache check
+    cached = get_cached_uri(canonical)
     if cached:
         cached["source"] = "cache"
         return cached
 
-    # 2️⃣ Google Safe Browsing
+    # 2️⃣ Google Safe Browsing (blocklist only)
     gsb_result = check_google_safe_browsing(url)
 
     if gsb_result == "MALICIOUS":
@@ -38,21 +43,11 @@ def predict_url(url, threshold=0.72):
             "probability": 1.0,
             "source": "google_safe_browsing"
         }
-        cache_uri_result(canonicalize_domain(url), result)
+        cache_uri_result(canonical, result)
         return result
 
-    if gsb_result == "CLEAN":
-        result = {
-            "url": url,
-            "prediction": "BENIGN",
-            "probability": 0.0,
-            "source": "google_safe_browsing"
-        }
-        cache_uri_result(canonicalize_domain(url), result)
-        return result
-
-    # 3️⃣ ML fallback
-    features = extract_domain_features(canonicalize_domain(url))
+    # 3️⃣ ML fallback (GSB CLEAN or UNKNOWN)
+    features = extract_domain_features(canonical)
     X = pd.DataFrame([features])
 
     prob = model.predict_proba(X)[0, 1]
@@ -66,19 +61,20 @@ def predict_url(url, threshold=0.72):
         "source": "model"
     }
 
-    cache_uri_result(canonicalize_domain(url), result)
+    cache_uri_result(canonical, result)
     return result
+
 
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
-# test_url = input("Enter a URL to classify: ")
-# result = predict_url(test_url)
+test_url = input("Enter a URL to classify: ")
+result = predict_url(test_url)
 @app.post("/classify_url")
 def classify_url(request: URLRequest):
     return predict_url(request.url)
 
-#print("===== URI INFERENCE RESULT =====")
-#print(result)
-#print("================================")
+print("===== URI INFERENCE RESULT =====")
+print(result)
+print("================================")
 
