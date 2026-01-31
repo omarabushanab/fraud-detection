@@ -3,6 +3,7 @@ import base64
 import json
 import os
 import pickle
+from urllib import response
 import fitz  # PyMuPDF
 import io
 from fastapi import FastAPI, Request, Form
@@ -68,6 +69,7 @@ db = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379"),
 
 class EmailRequest(BaseModel):
     email: str
+    message_id: str = None
 
 html_content = ""
 # HTML template embedded in the code
@@ -98,6 +100,29 @@ async def get_user_service(email_address: str):
         await db.set(f"token:{email_address}", creds.to_json())
 
     return build("gmail", "v1", credentials=creds)
+
+# ======================
+# HISTORY TRACKING
+# ======================
+
+async def get_last_history_id(email: str) -> str:
+    """Get the last processed historyId for a user"""
+    history_id = await db.get(f"history:{email}")
+    return history_id
+
+async def update_last_history_id(email: str, history_id: str):
+    """Update the last processed historyId for a user"""
+    await db.set(f"history:{email}", history_id)
+    print(f"📊 Updated history checkpoint for {email}: {history_id}")
+
+async def get_current_history_id(service) -> str:
+    """Get the current historyId from Gmail"""
+    try:
+        profile = service.users().getProfile(userId='me').execute()
+        return profile.get('historyId')
+    except Exception as e:
+        print(f"Error getting current historyId: {e}")
+        return None
 
 # ======================
 # ML MODEL
@@ -170,6 +195,17 @@ def get_attachment_text(service, msg_id, parts):
             
     return " ".join(attachment_texts)
 
+async def scan_attachment_service(filename, raw_data):
+    ATTACHMENT_SERVICE_URL = "http://attachment_service:8004/scan"
+    async with httpx.AsyncClient() as client:
+        try:
+            files = {'file': (filename, raw_data)}
+            response = await client.post(ATTACHMENT_SERVICE_URL, files=files, timeout=30.0)
+            return response.json()
+        except Exception as e:
+            print(f"Connection error to attachment service: {e}")
+            return {"is_malicious": False}
+
 def get_parts_content(service, msg_id, payload):
     parts_to_classify = []
         
@@ -197,34 +233,38 @@ def get_parts_content(service, msg_id, payload):
                         if filename.lower().endswith('.pdf'):
                             print(f"📄 Extracting text from PDF: {filename}")
                             try:
-                                pdf_stream = io.BytesIO(raw_data)
-                                with fitz.open(stream=pdf_stream, filetype="pdf") as doc:
-                                    text = ""
-                                    for page in doc:
-                                        text += page.get_text()
-                                decoded_data = text
+                                pdf_document = fitz.open(stream=raw_data, filetype="pdf")
+                                pdf_text = ""
+                                for page_num in range(len(pdf_document)):
+                                    page = pdf_document[page_num]
+                                    pdf_text += page.get_text()
+                                
+                                if pdf_text.strip():
+                                    parts_to_classify.append(pdf_text)
+                                    print(f"✅ Extracted {len(pdf_text)} chars from PDF")
+                                else:
+                                    print(f"⚠️ PDF appears empty or has no extractable text")
+                                    
                             except Exception as e:
                                 print(f"❌ PDF extraction failed: {e}")
-                                decoded_data = ""
-                        
-                        # --- TEXT/PLAIN HANDLING ---
                         else:
-                            decoded_data = raw_data.decode('utf-8', errors='ignore')
-                        
-                        if decoded_data.strip():
-                            parts_to_classify.append({
-                                "source": f"Attachment: {filename}",
-                                "content": decoded_data
-                            })
-                            print(f"✅ Extracted content from {filename}")
-
+                            # For non-PDF attachments, decode as text
+                            try:
+                                text = raw_data.decode('utf-8', errors='ignore')
+                                parts_to_classify.append(text)
+                            except Exception as e:
+                                print(f"⚠️ Could not decode attachment {filename}: {e}")
+                
+                # Check nested parts
                 if 'parts' in part:
                     walk_parts(part['parts'])
-
+        
+        # Start the recursive walk
         if 'parts' in payload:
             walk_parts(payload['parts'])
-        
+    
     return parts_to_classify
+
 
 def extract_all_uris(service, msg_id, payload):
     """
@@ -283,174 +323,303 @@ def extract_all_uris(service, msg_id, payload):
 
     return list(all_uris)
 
-
-# ======================
-# PUSH ENDPOINT
-# ======================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    keys = await db.keys("token:*")
-    active_tasks = []
-
-    for key in keys:
-        email = key.split(":", 1)[1]
-        print(f"Launching lifespan worker for: {email}")
-
-        task = asyncio.create_task(processing_worker(email))
-        active_tasks.append(task)
+    """
+    Startup: Recover any abandoned tasks from 'task_in_progress' back to the queue
+    Shutdown: (optional) flush tasks
+    """
+    print("♻️ Recovering abandoned tasks...")
+    try:
+        while True:
+            # FIXED: Remove the extra await - lpop already returns the value
+            task_raw = await db.lpop("task_in_progress")
+            if not task_raw:
+                break
+            # Push it back to the main queue
+            await db.lpush("global_task_queue", task_raw)
+    except Exception as e:
+        print(f"⚠️ Error recovering tasks: {e}")
+    
+    # Start background workers
+    asyncio.create_task(global_sync_worker())
+    asyncio.create_task(global_processing_worker())
     
     yield
-
-    print("shutting down workers...")
-    for task in active_tasks:
-        task.cancel()
-    
-    await asyncio.gather(*active_tasks, return_exceptions=True)
-    await db.close()
-    print(" shutdown complete.")
+    # Shutdown logic (if needed)
 
 app = FastAPI(lifespan=lifespan)
 
-# 2. Add the middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],            # Permits these domains
-    # allow_credentials=True,          # Allows cookies/auth headers
-    allow_methods=["*"],              # Permits all methods (GET, POST, etc.)
-    allow_headers=["*"],              # Permits all headers
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 @app.post("/gmail/push")
 async def gmail_push(request: Request):
-    envelope = await request.json()
-    
-    # Verify the push contains valid data
-    if "message" not in envelope or "data" not in envelope["message"]:
-        return {"status": "ignored"}
-
-    # 1. Decode the notification payload from Google Pub/Sub
-    data = json.loads(base64.b64decode(envelope["message"]["data"]).decode())
-    email_address = data.get("emailAddress") 
-    current_history_id = int(data["historyId"])
-    print(f"🔔 Push notification received for {email_address} (historyId={current_history_id})")
-
-    # 2. Get the dynamic Gmail API service for THIS specific user
-    service = await get_user_service(email_address)
-    if not service:
-        return {"status": "user_not_authenticated"}
-    
-    # 3. Retrieve THIS user's last processed state from Redis
-    last_known_id = await db.get(f"history:{email_address}")
-
-    # Handle first-time baseline setup for a new user
-    if last_known_id is None:
-        await db.set(f"history:{email_address}", current_history_id)
-        print(f"ℹ️ History baseline set for {email_address}.")
-        return {"status": "baseline set"}
-    
+    """
+    Gmail Pub/Sub push endpoint.
+    Decode the Pub/Sub message, identify the user's email,
+    and queue messages for processing.
+    """
     try:
+        body = await request.json()
+        message = body.get("message", {})
+        data_b64 = message.get("data", "")
+        
+        if not data_b64:
+            return {"status": "no data"}
 
-        history_response = service.users().history().list(
-            userId="me",
-            startHistoryId=last_known_id,
-            historyTypes=["messageAdded"]
-        ).execute()
+        # Decode the Pub/Sub payload
+        decoded = base64.b64decode(data_b64).decode("utf-8")
+        notification = json.loads(decoded)
+        email_address = notification.get("emailAddress")
+        history_id = notification.get("historyId")
 
-        await db.set(f"history:{email_address}", current_history_id)
+        print(f"📬 Pub/Sub notification for {email_address}, historyId={history_id}")
 
-        if "history" in history_response:
-            for h in history_response["history"]:
-                for added in h.get("messagesAdded", []):
-                    msg_id = added["message"]["id"]
-                    try:
-                        msg_data = service.users().messages().get(userId="me", id=msg_id, format="minimal").execute()
-                        labels = msg_data.get("labelIds", [])
+        # Add to sync queue
+        await db.lpush(
+            "global_sync_queue",
+            json.dumps({"email": email_address, "history_id": history_id})
+        )
 
-                        if "INBOX" not in labels:
-                            print(f"ℹ️ Message {msg_id} for {email_address} is not in INBOX. Skipping.")
-                            continue
-                    except Exception as e:
-                        print(f"❌ could not verify labels for {msg_id} for {email_address}: {e}")
-                        continue
-                   
-                   
-                    is_duplicate = await db.get(f"processed:{msg_id}:{email_address}")
-                    if is_duplicate:
-                        print(f"⚠️ Message {msg_id} for {email_address} already queued. Skipping duplicate.")
-                        continue
-                    await db.lpush(f"queue:{email_address}", msg_id)
-                    print(f"➕ Queued message {msg_id} for {email_address} processing.")
-                    await db.setex(f"processed:{msg_id}:{email_address}", 86400, "1")  # 1 day expiry
-        # await db.set(f"history:{email_address}", current_history_id)
-    except HttpError as error:
-        # 404 means the History ID is too old (expires after 7 days)
-        if error.resp.status == 404:
-            print(f"⚠️ History ID expired for {email_address}. Resetting baseline...")
-            await db.set(f"history:{email_address}", current_history_id)
-        else:
-            print(f"❌ API Error for {email_address}: {error}")
-    return {"status": "ok"}
+        return {"status": "queued"}
+    except Exception as e:
+        print(f"Error in /gmail/push: {e}")
+        return {"status": "error", "message": str(e)}
 
-async def processing_worker(email_address: str):
-    print(f" Worker started for {email_address}")
+
+async def global_sync_worker():
+    """
+    Continuously pull from 'global_sync_queue' and fetch new messages.
+    For each new message, add it to 'global_task_queue' for processing.
+    """
+    print("🚀 Global Sync Worker started.")
     while True:
         try:
-            #fetch up to 8 messages from the queue
-            msg_ids = []
-            for _ in range(8):
-                msg_id = await db.rpop(f"queue:{email_address}")
-                if msg_id:
-                    msg_ids.append(msg_id)
-                else:
-                    break
+            # FIXED: brpop returns a tuple (key, value) when successful, None when timeout
+            result = await db.brpop("global_sync_queue", timeout=5)
+            if not result:
+                await asyncio.sleep(1)
+                continue
             
-            if not msg_ids:
-                await asyncio.sleep(10)  # No messages, wait before checking again
+            # Unpack the tuple
+            _, sync_raw = result
+            sync_data = json.loads(sync_raw)
+            email = sync_data["email"]
+            new_history_id = sync_data["history_id"]
+
+            service = await get_user_service(email)
+            if not service:
+                print(f"⚠️ No service available for {email}")
                 continue
 
-            service = await get_user_service(email_address)
-            malicious_label_id = get_or_create_malicious_label(service)
-
-            #2. fetch full email content for batch
-            batch_items = []
-            valid_ids = []
-            for mid in msg_ids:
-                try:
-                    email = service.users().messages().get(userId="me", id=mid).execute()
-                    urls = extract_all_uris(service, mid, email['payload'])
-
-                    batch_items.append({
-                        "text": email.get('snippet', ''),
-                        "urls": urls
-                    })
-                    valid_ids.append(mid)
-                except Exception as e:
-                    print(f"❌ Failed to fetch email {mid} for {email_address}: {e}")
-            if not batch_items:
-                continue
-
-            #3. call batch predict (stress reduction)
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    "http://xlmr_service:8001/predict_batch",
-                    json={"items": batch_items},
-                    timeout=45.0
-                )
-                results = response.json()
-
-            #4. take action based on batch results
-            for mid, res in zip(msg_ids, results):
-                if res["label"] == "phishing":
-                    print(f"🚨 PHISHING DETECTED in {mid}. Reason: {res.get('reason')}")
-                    move_to_malicious(service, mid, malicious_label_id)
-                    print(f"🚨 Moved {mid} to Malicious folder.")
+            # Get the last processed historyId
+            last_history_id = await get_last_history_id(email)
+            
+            if not last_history_id:
+                # First time for this user - get current historyId and use it as baseline
+                current_id = await get_current_history_id(service)
+                if current_id:
+                    await update_last_history_id(email, current_id)
+                    last_history_id = current_id
+                    print(f"🆕 First sync for {email}, baseline historyId: {current_id}")
                 else:
-                    print(f"✅ Message {mid} is safe.")
+                    # Fallback: do a full sync of recent messages
+                    print(f"⚠️ Could not get historyId for {email}, doing full sync...")
+                    try:
+                        results = service.users().messages().list(
+                            userId="me",
+                            maxResults=10,
+                            labelIds=["INBOX"]
+                        ).execute()
+                        messages = results.get("messages", [])
+                        for msg in messages:
+                            await db.lpush(
+                                "global_task_queue",
+                                json.dumps({"email": email, "msg_id": msg["id"]})
+                            )
+                        # Update to new historyId
+                        await update_last_history_id(email, new_history_id)
+                    except Exception as e:
+                        print(f"Error in full sync: {e}")
+                    continue
+
+            # Fetch new messages using history API
+            try:
+                print(f"📨 Fetching history from {last_history_id} to {new_history_id} for {email}")
+                history = service.users().history().list(
+                    userId="me",
+                    startHistoryId=last_history_id,
+                    historyTypes=["messageAdded"]
+                ).execute()
+
+                message_count = 0
+                for record in history.get("history", []):
+                    for added in record.get("messagesAdded", []):
+                        msg_id = added["message"]["id"]
+                        # Queue this message for processing
+                        await db.lpush(
+                            "global_task_queue",
+                            json.dumps({"email": email, "msg_id": msg_id})
+                        )
+                        message_count += 1
+                
+                if message_count > 0:
+                    print(f"✅ Queued {message_count} new message(s) for {email}")
+                
+                # CRITICAL: Update the history checkpoint to the new historyId
+                await update_last_history_id(email, new_history_id)
+
+            except HttpError as e:
+                if e.resp.status == 404:
+                    print(f"⚠️ History not found for {email} (historyId too old), doing full sync...")
+                    # Fallback to listing recent messages
+                    results = service.users().messages().list(
+                        userId="me",
+                        maxResults=10,
+                        labelIds=["INBOX"]
+                    ).execute()
+                    messages = results.get("messages", [])
+                    for msg in messages:
+                        await db.lpush(
+                            "global_task_queue",
+                            json.dumps({"email": email, "msg_id": msg["id"]})
+                        )
+                    # Update to new historyId
+                    await update_last_history_id(email, new_history_id)
+                else:
+                    print(f"❌ HTTP Error {e.resp.status} fetching history: {e}")
+
         except Exception as e:
-            print(f"❌ Worker error for {email_address}: {e}")
+            print(f"❌ Global Sync Error: {e}")
+            import traceback
+            traceback.print_exc()
             await asyncio.sleep(5)
 
 
+async def global_processing_worker():
+    """
+    A single worker that processes batches for ALL users.
+    """
+    print("🚀 Global Processing Worker started.")
+    while True:
+        try:
+            tasks = []
+            # Batch up to 8 tasks
+            for _ in range(8):
+                # FIXED: brpoplpush returns the value directly (a string), not a tuple
+                t = await db.brpoplpush("global_task_queue", "task_in_progress", timeout=1)
+                if t: 
+                    tasks.append(t)
+                else:
+                    break
+            
+            if not tasks:
+                await asyncio.sleep(5)
+                continue
+
+            work_by_user = {}
+            for t_raw in tasks:
+                data = json.loads(t_raw)
+                work_by_user.setdefault(data["email"], []).append({"raw": t_raw, "id": data["msg_id"]})
+
+            for email, msg_list in work_by_user.items():
+                service = await get_user_service(email)
+                if not service: 
+                    # Remove from in_progress if no service available
+                    for item in msg_list:
+                        await db.lrem("task_in_progress", 1, item["raw"])
+                    continue
+                
+                malicious_label_id = get_or_create_malicious_label(service)
+                batch_items = []
+                valid_mids = []
+                raw_task_map = {} 
+
+                for item in msg_list:
+                    mid = item["id"]
+                    raw_task_map[mid] = item["raw"]
+                    try:
+                        msg_details = service.users().messages().get(userId="me", id=mid).execute()
+                        payload = msg_details['payload']
+
+                        # --- ATTACHMENT SCANNING ---
+                        is_malicious_att = False
+                        async def scan_parts(parts):
+                            nonlocal is_malicious_att
+                            for part in parts:
+                                if part.get('filename') and 'attachmentId' in part['body']:
+                                    att = service.users().messages().attachments().get(
+                                        userId='me', messageId=mid, id=part['body']['attachmentId']
+                                    ).execute()
+                                    raw_data = base64.urlsafe_b64decode(att['data'])
+                                    scan_res = await scan_attachment_service(part['filename'], raw_data)
+                                    if scan_res.get("is_malicious"):
+                                        await db.setex(f"scan_result:{mid}", 86400, json.dumps(scan_res))
+                                        is_malicious_att = True
+                                        return
+                                if 'parts' in part: 
+                                    await scan_parts(part['parts'])
+
+                        if 'parts' in payload: 
+                            await scan_parts(payload['parts'])
+
+                        if is_malicious_att:
+                            move_to_malicious(service, mid, malicious_label_id)
+                            await db.lrem("task_in_progress", 1, item["raw"])
+                            print(f"🚨 Moved malicious attachment email {mid} for {email}")
+                            continue
+
+                        # --- URL EXTRACTION ---
+                        urls = extract_all_uris(service, mid, payload)
+                        batch_items.append({"text": msg_details.get('snippet', ''), "urls": urls})
+                        valid_mids.append(mid)
+
+                    except Exception as e:
+                        print(f"⚠️ Error fetching {mid}: {e}")
+                        # Remove from in_progress on error
+                        await db.lrem("task_in_progress", 1, item["raw"])
+
+                # 3. Batch Predict
+                if batch_items:
+                    try:
+                        async with httpx.AsyncClient() as client:
+                            response = await client.post(
+                                "http://xlmr_service:8001/predict_batch",
+                                json={"items": batch_items},
+                                timeout=45.0
+                            )
+                            results = response.json()
+
+                        processed_count = 0
+                        phishing_count = 0
+                        for mid, res in zip(valid_mids, results):
+                            if res["label"] == "phishing":
+                                move_to_malicious(service, mid, malicious_label_id)
+                                phishing_count += 1
+                            
+                            await db.lrem("task_in_progress", 1, raw_task_map[mid])
+                            processed_count += 1
+                        
+                        print(f"✅ Processed {processed_count} emails for {email} ({phishing_count} phishing)")
+                        
+                    except Exception as e:
+                        print(f"⚠️ Batch prediction error: {e}")
+                        # Remove from in_progress on error
+                        for mid in valid_mids:
+                            await db.lrem("task_in_progress", 1, raw_task_map[mid])
+
+        except Exception as e:
+            print(f"❌ Global Processing Error: {e}")
+            import traceback
+            traceback.print_exc()
+            await asyncio.sleep(5)
+            
 @app.get("/login")
 async def login():
     # Use the credentials.json to create an OAuth flow
@@ -493,15 +662,21 @@ async def oauth_callback(code: str):
 
     # Save the real token and setup watching in Redis
     await db.set(f"token:{email}", creds.to_json())
-    asyncio.create_task(processing_worker(email))
 
     gmail_service = build('gmail', 'v1', credentials=creds)
-    gmail_service.users().watch(
+    watch_response = gmail_service.users().watch(
         userId='me', 
         body={'topicName': 'projects/unifonic-481420/topics/gmail-push'}
     ).execute()
     
+    # CRITICAL: Store the initial historyId as the baseline
+    initial_history_id = watch_response.get('historyId')
+    if initial_history_id:
+        await update_last_history_id(email, initial_history_id)
+        print(f"🔖 Stored initial historyId for {email}: {initial_history_id}")
+    
     return RedirectResponse(url=f"{BASE_URL}/")
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     return html_content
@@ -531,11 +706,42 @@ async def classify_email(request: EmailRequest):
 
 @app.post("/analyze-full")
 async def proxy_analyze_full(req: EmailRequest):
+
+    final_result = {
+        "label": "safe",
+        "reason_type": "safe",
+        "malicious_url": None,
+        "filename": None,
+        "triggers": []
+    }
+
+    if req.message_id:
+        saved_scan = await db.get(f"scan_result:{req.message_id}")
+        if saved_scan:
+            scan_data = json.loads(saved_scan)
+            if scan_data.get("is_malicious"):
+                return {
+                    "label": "phishing",
+                    "reason_type": "attachment",
+                    "filename": scan_data.get("filename"),
+                    "triggers": scan_data.get("findings", [])
+                }
     async with httpx.AsyncClient() as client:
         # Forward the request to the internal xlmr_service
-        explainer_service_url = os.getenv("EXPLAINER_URL", "http://xlmr_service:8001/analyze-full")
-        response = await client.post(explainer_service_url, json={"text": req.email}, timeout=20.0)
-        return response.json()
+        try:
+            explainer_service_url = os.getenv("EXPLAINER_URL", "http://xlmr_service:8001/analyze-full")
+            response = await client.post(explainer_service_url, json={"text": req.email}, timeout=20.0)
+            xlmr_data = response.json()
+
+            final_result.update(xlmr_data)
+        except Exception as e:
+            print(f"XLM-R Service Error: {e}")
+
+    return final_result
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 # ======================
 # RUN SERVER
