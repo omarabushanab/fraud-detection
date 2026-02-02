@@ -70,6 +70,26 @@ def predict_url(url, api_key=os.getenv("SAFE_BROWSING_API_KEY"), threshold=0.72)
         cached["source"] = "cache"
         return cached
     
+    tranco = pd.read_csv("datasets/tranco_20122025.csv", header=None)
+    benign_urls = tranco[1]
+
+    df_benign_urls = pd.DataFrame({
+        "domain": benign_urls,
+    })
+
+    if (url.lower().strip() in df_benign_urls["domain"].str.lower().str.strip().values):
+        print(f"⚠️  Found in benign URLs list")
+        result = {
+            "url": url,
+            "resolved_url": resolution_result.get('final_url'),
+            "prediction": "BENIGN",
+            "probability": 0.0,
+            "source": "benign URLs list",
+            "threats": resolution_result['threats']
+        }
+        cache_uri_result(canonical, result)
+        return result
+    
     # 2️⃣ At this point, Safe Browsing either returned CLEAN or UNKNOWN
     # Continue to ML model for final prediction
     features = extract_domain_features(canonical)
