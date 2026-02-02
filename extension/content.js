@@ -222,32 +222,107 @@ async function fetchExplanation() {
 // 4. Injection Trigger
 // ==========================================
 
+// function injectExplainButton() {
+//     // Only show button in "Malicious" folder or if we suspect it
+//     if (!window.location.hash.includes('malicious')) return;
+    
+//     // Look for the action toolbar (Archive, Delete, etc.)
+//     const toolbar = document.querySelector('.G-atb') || document.querySelector('.iH');
+    
+//     if (toolbar && !document.getElementById('ai-explain-btn')) {
+//         const btn = document.createElement('div');
+//         btn.id = 'ai-explain-btn';
+//         btn.role = "button";
+//         btn.className = "T-I J-J5-Ji nu T-I-ax7 L3"; // Native Gmail button classes
+//         btn.innerHTML = "🤖 Why is this Phishing?";
+//         btn.style.backgroundColor = "#d93025";
+//         btn.style.color = "#fff";
+//         btn.style.backgroundImage = "none";
+//         btn.style.marginLeft = "10px";
+        
+//         btn.onclick = fetchExplanation;
+        
+//         // Append to the toolbar
+//         // Try to find the second group of buttons to place it nicely
+//         const container = toolbar.querySelector('.G-Ni') || toolbar;
+//         container.appendChild(btn);
+//     }
+// }
+
+// // Run periodically to handle navigation (Gmail is a SPA)
+// setInterval(injectExplainButton, 1000);
+
+
+// extension/content.js
+
+/**
+ * Core Injection Logic
+ * Uses the selectors that worked for you, but adds a check to avoid duplicates.
+ */
 function injectExplainButton() {
-    // Only show button in "Malicious" folder or if we suspect it
-    if (!window.location.hash.includes('malicious')) return;
-    
-    // Look for the action toolbar (Archive, Delete, etc.)
-    const toolbar = document.querySelector('.G-atb') || document.querySelector('.iH');
-    
-    if (toolbar && !document.getElementById('ai-explain-btn')) {
-        const btn = document.createElement('div');
-        btn.id = 'ai-explain-btn';
-        btn.role = "button";
-        btn.className = "T-I J-J5-Ji nu T-I-ax7 L3"; // Native Gmail button classes
-        btn.innerHTML = "🤖 Why is this Phishing?";
-        btn.style.backgroundColor = "#d93025";
-        btn.style.color = "#fff";
-        btn.style.backgroundImage = "none";
-        btn.style.marginLeft = "10px";
-        
-        btn.onclick = fetchExplanation;
-        
-        // Append to the toolbar
-        // Try to find the second group of buttons to place it nicely
-        const container = toolbar.querySelector('.G-Ni') || toolbar;
-        container.appendChild(btn);
+    // 1. Only proceed if we are in the malicious folder
+    if (!window.location.hash.includes('malicious')) {
+        const existingBtn = document.getElementById('ai-explain-btn');
+        if (existingBtn) existingBtn.remove();
+        return;
     }
+
+    // 2. Attempt the selectors you confirmed were working
+    const toolbar = document.querySelector('div[role="main"] .G-atb') || 
+                    document.querySelector('.ade') || 
+                    document.querySelector('.ha'); 
+    
+    // 3. Prevent duplicate injection
+    if (!toolbar || document.getElementById('ai-explain-btn')) return;
+
+    // 4. Create the button exactly as you styled it
+    const btn = document.createElement('button');
+    btn.id = 'ai-explain-btn';
+    btn.innerText = "Explain Phishing Risk";
+    btn.style = `
+        background: #ef4444; 
+        color: white; 
+        border: none; 
+        padding: 8px 15px; 
+        margin: 5px; 
+        border-radius: 4px; 
+        cursor: pointer; 
+        font-weight: bold; 
+        position: relative; 
+        z-index: 1000;
+        display: inline-flex;
+        align-items: center;
+    `;
+    
+    // Attach your working function
+    // btn.onclick = () => {
+    //     console.log("Button clicked: Starting XLM-R Explanation...");
+    //     checkAndHighlight(); // Removed forced manual trigger as it's built into the function
+    // };
+    // Attach your working function
+    btn.onclick = () => {
+        console.log("Button clicked: Starting XLM-R Explanation...");
+        fetchExplanation(); // FIX: Call the correct function name
+    };
+    // 5. Append it to the container
+    toolbar.appendChild(btn);
+    console.log("✅ Button injected into toolbar.");
 }
 
-// Run periodically to handle navigation (Gmail is a SPA)
-setInterval(injectExplainButton, 1000);
+// ==========================================
+// Robust Trigger Logic (Replaces setInterval)
+// ==========================================
+
+// A. MutationObserver: Fires immediately when Gmail updates the DOM
+const observer = new MutationObserver(() => {
+    injectExplainButton();
+});
+
+// Start observing the main Gmail structure
+observer.observe(document.body, {
+    childList: true,
+    subtree: true
+});
+
+// B. Initial Call
+injectExplainButton();
