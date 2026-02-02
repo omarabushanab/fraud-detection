@@ -43,23 +43,31 @@ def clean_html_for_llm(html_content):
 #     print(f"HTML Content Ratio: {ratio:.2f} (Threshold: {threshold})")
 #     return ratio > threshold
 
-def is_mostly_html(raw_content, plain_text_content, threshold=0.50):
-    """
-    Detects if an email is HTML-heavy by comparing the raw HTML size 
-    (including text inside tags) against the standalone plain text version.
-    """
+# xlmr_service/app/utils.py
+
+def is_mostly_html(raw_content, plain_text_content, threshold=0.70):
     if not raw_content or not plain_text_content:
         return False
         
     html_len = len(raw_content)
     text_len = len(plain_text_content)
+    overhead = html_len - text_len
     
-    if html_len == 0:
+    # ---------------------------------------------------------
+    # CRITICAL FIX: Ignore standard Gmail wrappers (~800 chars)
+    # If the email structure is smaller than 1,200 chars, 
+    # it is too simple to need Gemini. Send it to XLM-R.
+    # ---------------------------------------------------------
+    if overhead < 1200: 
+        print(f"📉 Low Overhead ({overhead} chars). Skipping Ratio Check.")
         return False
 
-    # Ratio of HTML structure+content vs standalone text
-    # A high ratio means the HTML version is much 'heavier' than the text version
+    if html_len == 0: 
+        return False
+
     ratio = (html_len - text_len) / html_len
     
-    print(f"📊 HTML Complexity Ratio: {ratio:.2f} (Threshold: {threshold})")
+    print(f"📊 Stats: HTML_Len={html_len}, Text_Len={text_len}, Overhead={overhead}")
+    print(f"📊 Ratio: {ratio:.2f} (Threshold: {threshold})")
+    
     return ratio > threshold

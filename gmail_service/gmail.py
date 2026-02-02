@@ -591,6 +591,45 @@ async def global_sync_worker():
             traceback.print_exc()
             await asyncio.sleep(5)
 
+# Add this new function to gmail.py (outside the worker)
+async def background_shap_analysis(email: str, mid: str, text: str, current_data: dict):
+    """
+    Background task to calculate SHAP values and update the Redis explanation.
+    This runs AFTER the email is already moved to malicious, avoiding delay.
+    """
+    try:
+        # print(f"⏳ Starting background SHAP analysis for {mid}...")
+        async with httpx.AsyncClient() as client:
+            # Call the /explain endpoint we saw in your main.py
+            response = await client.post(
+                "http://xlmr_service:8001/explain",
+                json={"text": text},
+                timeout=3000.0  # SHAP can be slow
+            )
+            
+            if response.status_code == 200:
+                shap_data = response.json()
+                triggers = shap_data.get("triggers", [])
+                
+                # Update the data with the new triggers
+                current_data["triggers"] = triggers
+                
+                # Save back to Redis (overwriting the previous entry)
+                await db.setex(
+                    f"explanation:{email}:{mid}", 
+                    86400 * 7, 
+                    json.dumps(current_data)
+                )
+                print(f"✅ Background SHAP complete for {mid}. Found {len(triggers)} triggers.")
+            else:
+                print(f"⚠️ Background SHAP failed: {response.status_code}")
+                
+    except Exception as e:
+        print(f"❌ Error in background SHAP task: {e}")
+
+# ==========================================
+# Updated Processing Worker
+# ==========================================
 
 async def global_processing_worker():
     """
@@ -620,7 +659,6 @@ async def global_processing_worker():
             for email, msg_list in work_by_user.items():
                 service = await get_user_service(email)
                 if not service: 
-                    # Remove from in_progress if no service available
                     for item in msg_list:
                         await db.lrem("task_in_progress", 1, item["raw"])
                     continue
@@ -629,6 +667,7 @@ async def global_processing_worker():
                 batch_items = []
                 valid_mids = []
                 raw_task_map = {} 
+                mid_to_text_map = {} # Store text for background SHAP
 
                 for item in msg_list:
                     mid = item["id"]
@@ -637,7 +676,7 @@ async def global_processing_worker():
                         msg_details = service.users().messages().get(userId="me", id=mid).execute()
                         payload = msg_details['payload']
 
-                        # Check for malicious attachments
+                        # --- [ATTACHMENT CHECK LOGIC] ---
                         is_malicious_att = False
                         final_scan_res = {}
                         found_malicious_part = None
@@ -668,165 +707,366 @@ async def global_processing_worker():
                             found_malicious_part = await scan_parts(payload['parts'])
 
                         if is_malicious_att and found_malicious_part:
-                            # Refresh labels before moving
-                            current_msg = service.users().messages().get(userId="me", id=mid).execute()
-                            current_labels = current_msg.get("labelIds", [])
-
-                            # Only remove INBOX if it exists (avoid no-op)
-                            if "INBOX" in current_labels:
+                            # 1. MOVE TO MALICIOUS
+                            if "INBOX" in msg_details.get("labelIds", []):
                                 move_to_malicious(service, mid, malicious_label_id)
                             else:
-                                # Still add malicious label even if not in inbox
                                 service.users().messages().modify(
-                                    userId="me",
-                                    id=mid,
-                                    body={"addLabelIds": [malicious_label_id]}
+                                    userId="me", id=mid, body={"addLabelIds": [malicious_label_id]}
                                 ).execute()
 
-                            storage_key = f"explanation:{email}:{mid}"
-                            await db.setex(storage_key, 86400, json.dumps({
+                            findings_list = final_scan_res.get("findings", [])
+                            technical_details = "; ".join(findings_list) if findings_list else "Unknown threat"
+
+                            # 2. SAVE EXPLANATION (Attachment findings are the triggers)
+                            explanation_data = {
                                 "label": "phishing",
+                                "message_id": mid,
+                                "user_email": email,
                                 "reason_type": "attachment",
+                                "reason": f"Malicious attachment detected: '{found_malicious_part.get('filename')}' detected. Detections: {technical_details} ",
                                 "filename": found_malicious_part.get('filename'),
-                                "reason": "Malicious attachment detected",
-                                "triggers": final_scan_res.get("findings", []),
+                                "triggers": findings_list, # << ClamAV/OLEVBA reasons saved here
                                 "confidence": 1.0
-                            }))
+                            }
+                            await db.setex(f"explanation:{email}:{mid}", 86400 * 7, json.dumps(explanation_data))
+                            
                             await db.lrem("task_in_progress", 1, item["raw"])
                             print(f"🚨 Moved malicious attachment email {mid} for {email}")
                             continue
                         
+                        # --- [PREPARE FOR TEXT ANALYSIS] ---
                         email_html = await get_email_content_for_llm(payload)
                         urls = extract_all_uris(service, mid, payload)
-                       
                         plain_text = extract_plain_text_from_payload(payload)
                         if not plain_text or not plain_text.strip():
                             plain_text = msg_details.get("snippet", "")
-                        # print(f"this is the items being sent to xlmr: {plain_text}, {urls}, {email_html}")
+                        
                         batch_items.append({
                             "text": plain_text,
                             "urls": urls,
                             "html": email_html                            
                         })
                         valid_mids.append(mid)
+                        mid_to_text_map[mid] = plain_text # Save text for SHAP later
 
                     except Exception as e:
                         print(f"⚠️ Error fetching {mid}: {e}")
                         await db.lrem("task_in_progress", 1, item["raw"])
 
-                # Batch Predict
+                # --- [BATCH PREDICTION] ---
                 if batch_items:
                     try:
-                        print(f"🔄 Sending {len(batch_items)} items to batch prediction")
-                        print(f"📦 Sample item structure: {list(batch_items[0].keys()) if batch_items else 'none'}")
-                        
                         async with httpx.AsyncClient() as client:
                             response = await client.post(
                                 "http://xlmr_service:8001/predict_batch",
                                 json={"items": batch_items},
                                 timeout=180.0
                             )
-                            
-                            print(f"📊 Batch predict response status: {response.status_code}")
-                            
-                            if response.status_code != 200:
-                                error_text = response.text[:500]  # First 500 chars of error
-                                print(f"❌ Bad response from detector: {response.status_code}")
-                                print(f"❌ Error details: {error_text}")
-                                raise ValueError(f"Bad response from detector: {response.status_code} - {error_text}")
-                            
                             results = response.json()
-                            print(f"✅ Received {len(results)} results from batch prediction")
 
                         processed_count = 0
-                        phishing_count = 0
                         
                         for mid, res in zip(valid_mids, results):
                             if res["label"] == "phishing":
-                                # Refresh labels before moving
+                                # 1. MOVE TO MALICIOUS IMMEDIATELY
                                 current_msg = service.users().messages().get(userId="me", id=mid).execute()
-                                current_labels = current_msg.get("labelIds", [])
-
-                                # Only remove INBOX if it exists (avoid no-op)
-                                if "INBOX" in current_labels:
+                                if "INBOX" in current_msg.get("labelIds", []):
                                     move_to_malicious(service, mid, malicious_label_id)
                                 else:
-                                    # Still add malicious label even if not in inbox
                                     service.users().messages().modify(
-                                        userId="me",
-                                        id=mid,
-                                        body={"addLabelIds": [malicious_label_id]}
+                                        userId="me", id=mid, body={"addLabelIds": [malicious_label_id]}
                                     ).execute()
-                                print(f"🚨 Moved email {mid} to Malicious for {email}")
-                                phishing_count += 1
+                                print(f"🚨 Moved email {mid} to Malicious")
 
-                                # Determine reason type
+                                # 2. DETERMINE REASON TYPE
+                                reason_type = "xlmr"
                                 if res.get("url"):
                                     reason_type = "url"
                                 elif "LLM:" in res.get("reason", ""):
                                     reason_type = "llm"
-                                else:
-                                    reason_type = "xlmr"
 
+                                # 3. SAVE INITIAL EXPLANATION
+                                # Triggers are empty for XLM-R initially to save time
                                 explanation_data = {
                                     "label": "phishing",
                                     "message_id": mid,
                                     "user_email": email,
-                                    "reason_type": reason_type,  # url | llm | xlmr | attachment
-                                    "reason": res.get("reason", ""),
+                                    "reason_type": reason_type,
+                                    "reason": res.get("reason", ""), # << LLM reason saved here if applicable
                                     "confidence": res.get("confidence", 0.0),
                                     "malicious_url": res.get("url"),
-                                    "triggers": res.get("triggers", []),
+                                    "triggers": res.get("triggers", []), 
                                 }
 
-
-                                # Store in Redis
                                 await db.setex(
                                     f"explanation:{email}:{mid}", 
-                                    86400, 
+                                    86400 * 7, 
                                     json.dumps(explanation_data)
                                 )
-                                
+
+                                # 4. TRIGGER BACKGROUND SHAP (Only for XLM-R text detections)
+                                if reason_type == "xlmr":
+                                    # Fire and forget - doesn't block the loop
+                                    text_for_shap = mid_to_text_map.get(mid, "")
+                                    asyncio.create_task(
+                                        background_shap_analysis(email, mid, text_for_shap, explanation_data)
+                                    )
+
                             await db.lrem("task_in_progress", 1, raw_task_map[mid])
                             processed_count += 1
                         
-                        print(f"✅ Processed {processed_count} emails for {email} ({phishing_count} phishing)")
-                        
-                    except httpx.TimeoutException as e:
-                        print(f"⏱️ Batch prediction timeout after 45s: {e}")
-
-                        # CRITICAL FIX:
-                        # Do NOT drop tasks on timeout, requeue them for retry.
-                        for mid in valid_mids:
-                            raw = raw_task_map.get(mid)
-                            if raw:
-                                await db.lrem("task_in_progress", 1, raw)
-                                await db.lpush("global_task_queue", raw)
-
-                        await asyncio.sleep(2)
-
-                    except httpx.HTTPError as e:
-                        print(f"🌐 HTTP error in batch prediction: {e}")
-                        for mid in valid_mids:
-                            await db.lrem("task_in_progress", 1, raw_task_map.get(mid, ""))
-                    except json.JSONDecodeError as e:
-                        print(f"📝 JSON decode error in batch prediction: {e}")
-                        print(f"Raw response: {response.text[:500] if 'response' in locals() else 'N/A'}")
-                        for mid in valid_mids:
-                            await db.lrem("task_in_progress", 1, raw_task_map.get(mid, ""))
                     except Exception as e:
                         print(f"⚠️ Batch prediction error: {e}")
-                        print(f"Error type: {type(e).__name__}")
-                        import traceback
-                        traceback.print_exc()
                         for mid in valid_mids:
-                            await db.lrem("task_in_progress", 1, raw_task_map.get(mid, ""))
+                            # Re-queue on error logic here...
+                             await db.lrem("task_in_progress", 1, raw_task_map.get(mid, ""))
 
         except Exception as e:
             print(f"❌ Global Processing Error: {e}")
-            import traceback
-            traceback.print_exc()
             await asyncio.sleep(5)
+# async def global_processing_worker():
+#     """
+#     A single worker that processes batches for ALL users.
+#     """
+#     print("🚀 Global Processing Worker started.")
+#     while True:
+#         try:
+#             tasks = []
+#             # Batch up to 8 tasks
+#             for _ in range(8):
+#                 t = await db.brpoplpush("global_task_queue", "task_in_progress", timeout=1)
+#                 if t: 
+#                     tasks.append(t)
+#                 else:
+#                     break
+            
+#             if not tasks:
+#                 await asyncio.sleep(5)
+#                 continue
+
+#             work_by_user = {}
+#             for t_raw in tasks:
+#                 data = json.loads(t_raw)
+#                 work_by_user.setdefault(data["email"], []).append({"raw": t_raw, "id": data["msg_id"]})
+
+#             for email, msg_list in work_by_user.items():
+#                 service = await get_user_service(email)
+#                 if not service: 
+#                     # Remove from in_progress if no service available
+#                     for item in msg_list:
+#                         await db.lrem("task_in_progress", 1, item["raw"])
+#                     continue
+                
+#                 malicious_label_id = get_or_create_malicious_label(service)
+#                 batch_items = []
+#                 valid_mids = []
+#                 raw_task_map = {} 
+
+#                 for item in msg_list:
+#                     mid = item["id"]
+#                     raw_task_map[mid] = item["raw"]
+#                     try:
+#                         msg_details = service.users().messages().get(userId="me", id=mid).execute()
+#                         payload = msg_details['payload']
+
+#                         # Check for malicious attachments
+#                         is_malicious_att = False
+#                         final_scan_res = {}
+#                         found_malicious_part = None
+
+#                         async def scan_parts(parts):
+#                             nonlocal is_malicious_att, final_scan_res
+#                             for part in parts:
+#                                 if part.get('filename') and 'attachmentId' in part['body']:
+#                                     att = await asyncio.to_thread(service.users().messages().attachments().get(
+#                                         userId='me', messageId=mid, id=part['body']['attachmentId']
+#                                     ).execute)
+
+#                                     raw_data = base64.urlsafe_b64decode(att['data'])
+#                                     scan_res = await scan_attachment_service(part['filename'], raw_data)
+                                    
+#                                     if scan_res.get("is_malicious"):
+#                                         final_scan_res = scan_res
+#                                         is_malicious_att = True
+#                                         return part
+                                
+#                                 if 'parts' in part: 
+#                                     result = await scan_parts(part['parts'])
+#                                     if result: 
+#                                         return result
+#                             return None
+
+#                         if 'parts' in payload: 
+#                             found_malicious_part = await scan_parts(payload['parts'])
+
+#                         if is_malicious_att and found_malicious_part:
+#                             # Refresh labels before moving
+#                             current_msg = service.users().messages().get(userId="me", id=mid).execute()
+#                             current_labels = current_msg.get("labelIds", [])
+
+#                             # Only remove INBOX if it exists (avoid no-op)
+#                             if "INBOX" in current_labels:
+#                                 move_to_malicious(service, mid, malicious_label_id)
+#                             else:
+#                                 # Still add malicious label even if not in inbox
+#                                 service.users().messages().modify(
+#                                     userId="me",
+#                                     id=mid,
+#                                     body={"addLabelIds": [malicious_label_id]}
+#                                 ).execute()
+
+#                             explanation_data = {
+#                                 "label": "phishing",
+#                                 "message_id": mid,
+#                                 "user_email": email,
+#                                 "reason_type": "attachment",
+#                                 "reason": f"Malicious attachment detected: {found_malicious_part.get('filename')}",
+#                                 "filename": found_malicious_part.get('filename'),
+#                                 "triggers": final_scan_res.get("findings", []),
+#                                 "confidence": 1.0,
+#                             }
+                            
+#                             storage_key = f"explanation:{email}:{mid}"
+#                             await db.setex(storage_key,
+#                                         86400,
+#                                         json.dumps(explanation_data)
+#                             )
+#                             await db.lrem("task_in_progress", 1, item["raw"])
+#                             print(f"🚨 Moved malicious attachment email {mid} for {email}")
+#                             continue
+                        
+#                         email_html = await get_email_content_for_llm(payload)
+#                         urls = extract_all_uris(service, mid, payload)
+                       
+#                         plain_text = extract_plain_text_from_payload(payload)
+#                         if not plain_text or not plain_text.strip():
+#                             plain_text = msg_details.get("snippet", "")
+#                         # print(f"this is the items being sent to xlmr: {plain_text}, {urls}, {email_html}")
+#                         batch_items.append({
+#                             "text": plain_text,
+#                             "urls": urls,
+#                             "html": email_html                            
+#                         })
+#                         valid_mids.append(mid)
+
+#                     except Exception as e:
+#                         print(f"⚠️ Error fetching {mid}: {e}")
+#                         await db.lrem("task_in_progress", 1, item["raw"])
+
+#                 # Batch Predict
+#                 if batch_items:
+#                     try:
+#                         print(f"🔄 Sending {len(batch_items)} items to batch prediction")
+#                         print(f"📦 Sample item structure: {list(batch_items[0].keys()) if batch_items else 'none'}")
+                        
+#                         async with httpx.AsyncClient() as client:
+#                             response = await client.post(
+#                                 "http://xlmr_service:8001/predict_batch",
+#                                 json={"items": batch_items},
+#                                 timeout=180.0
+#                             )
+                            
+#                             print(f"📊 Batch predict response status: {response.status_code}")
+                            
+#                             if response.status_code != 200:
+#                                 error_text = response.text[:500]  # First 500 chars of error
+#                                 print(f"❌ Bad response from detector: {response.status_code}")
+#                                 print(f"❌ Error details: {error_text}")
+#                                 raise ValueError(f"Bad response from detector: {response.status_code} - {error_text}")
+                            
+#                             results = response.json()
+#                             print(f"✅ Received {len(results)} results from batch prediction")
+
+#                         processed_count = 0
+#                         phishing_count = 0
+                        
+#                         for mid, res in zip(valid_mids, results):
+#                             if res["label"] == "phishing":
+#                                 # Refresh labels before moving
+#                                 current_msg = service.users().messages().get(userId="me", id=mid).execute()
+#                                 current_labels = current_msg.get("labelIds", [])
+
+#                                 # Only remove INBOX if it exists (avoid no-op)
+#                                 if "INBOX" in current_labels:
+#                                     move_to_malicious(service, mid, malicious_label_id)
+#                                 else:
+#                                     # Still add malicious label even if not in inbox
+#                                     service.users().messages().modify(
+#                                         userId="me",
+#                                         id=mid,
+#                                         body={"addLabelIds": [malicious_label_id]}
+#                                     ).execute()
+#                                 print(f"🚨 Moved email {mid} to Malicious for {email}")
+#                                 phishing_count += 1
+
+#                                 # Determine reason type
+#                                 if res.get("url"):
+#                                     reason_type = "url"
+#                                 elif "LLM:" in res.get("reason", ""):
+#                                     reason_type = "llm"
+#                                 else:
+#                                     reason_type = "xlmr"
+
+#                                 explanation_data = {
+#                                     "label": "phishing",
+#                                     "message_id": mid,
+#                                     "user_email": email,
+#                                     "reason_type": reason_type,  # url | llm | xlmr | attachment
+#                                     "reason": res.get("reason", ""),
+#                                     "confidence": res.get("confidence", 0.0),
+#                                     "malicious_url": res.get("url"),
+#                                     "triggers": res.get("triggers", []),
+#                                 }
+
+
+#                                 # Store in Redis
+#                                 await db.setex(
+#                                     f"explanation:{email}:{mid}", 
+#                                     86400, 
+#                                     json.dumps(explanation_data)
+#                                 )
+                                
+#                             await db.lrem("task_in_progress", 1, raw_task_map[mid])
+#                             processed_count += 1
+                        
+#                         print(f"✅ Processed {processed_count} emails for {email} ({phishing_count} phishing)")
+                        
+#                     except httpx.TimeoutException as e:
+#                         print(f"⏱️ Batch prediction timeout after 45s: {e}")
+
+#                         # CRITICAL FIX:
+#                         # Do NOT drop tasks on timeout, requeue them for retry.
+#                         for mid in valid_mids:
+#                             raw = raw_task_map.get(mid)
+#                             if raw:
+#                                 await db.lrem("task_in_progress", 1, raw)
+#                                 await db.lpush("global_task_queue", raw)
+
+#                         await asyncio.sleep(2)
+
+#                     except httpx.HTTPError as e:
+#                         print(f"🌐 HTTP error in batch prediction: {e}")
+#                         for mid in valid_mids:
+#                             await db.lrem("task_in_progress", 1, raw_task_map.get(mid, ""))
+#                     except json.JSONDecodeError as e:
+#                         print(f"📝 JSON decode error in batch prediction: {e}")
+#                         print(f"Raw response: {response.text[:500] if 'response' in locals() else 'N/A'}")
+#                         for mid in valid_mids:
+#                             await db.lrem("task_in_progress", 1, raw_task_map.get(mid, ""))
+#                     except Exception as e:
+#                         print(f"⚠️ Batch prediction error: {e}")
+#                         print(f"Error type: {type(e).__name__}")
+#                         import traceback
+#                         traceback.print_exc()
+#                         for mid in valid_mids:
+#                             await db.lrem("task_in_progress", 1, raw_task_map.get(mid, ""))
+
+#         except Exception as e:
+#             print(f"❌ Global Processing Error: {e}")
+#             import traceback
+#             traceback.print_exc()
+#             await asyncio.sleep(5)
 
 
 

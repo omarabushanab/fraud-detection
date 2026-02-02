@@ -38,23 +38,38 @@ class XLMRPredictor:
         self.explainer = shap.Explainer(self.explainer_pipeline)
 
     def explain(self, text):
-        """Extract SHAP-based triggers from text"""
-        try:
-            shap_values = self.explainer([text])
-            tokens = shap_values.data[0]
-            values = shap_values.values[0][:, 1]
-            
-            # Filter for impact > 0.05 and ignore tokens shorter than 3 chars
-            triggers = [
-                tokens[i].replace('▁', '').strip() 
-                for i, val in enumerate(values) 
-                if val > 0.05 and len(tokens[i].replace('▁', '').strip()) > 2
-            ]
-            return list(set(triggers))
-        except Exception as e:
-            print(f"SHAP explanation error: {e}")
-            return []
-
+            """Extract SHAP-based triggers from text (Top 5 contributors)"""
+            try:
+                shap_values = self.explainer([text])
+                tokens = shap_values.data[0]
+                values = shap_values.values[0][:, 1]  # Contribution to 'Phishing' class
+                
+                token_val_pairs = []
+                
+                # XLM-R uses U+2581 ( ) as the space marker. 
+                # We must use that specific unicode character in the replace() call.
+                sentence_piece_marker = '\u2581' 
+                
+                for i, val in enumerate(values):
+                    # Clean the token: remove the marker and whitespace
+                    clean_t = tokens[i].replace(sentence_piece_marker, '').strip()
+                    
+                    # Filter: Only positive contributions and meaningful words (>2 chars)
+                    if val > 0 and len(clean_t) > 2:
+                        token_val_pairs.append((val, clean_t))
+                
+                # Sort by impact (highest first) and take top 5
+                token_val_pairs.sort(key=lambda x: x[0], reverse=True)
+                
+                # Extract just the words
+                triggers = [pair[1] for pair in token_val_pairs[:5]]
+                
+                print(f"🔍 SHAP Triggers found: {triggers}")
+                return list(set(triggers))
+                
+            except Exception as e:
+                print(f"SHAP explanation error: {e}")
+                return []
     async def predict(self, text: str, urls: list[str] = [], raw_html: str = None):
         """
         Single email prediction with optimized Gemini usage.
@@ -84,7 +99,7 @@ class XLMRPredictor:
         # 2. Check if content is VERY HTML-heavy (threshold raised to 70%)
         # This reduces unnecessary Gemini calls
         print(f"🔍 Checking HTML heaviness...{raw_html} and {is_mostly_html(raw_html,text)}")
-        if GEMINI_ENABLED and (raw_html or is_mostly_html(raw_html, text)):
+        if GEMINI_ENABLED and (is_mostly_html(raw_html, text)):
             print("🔍 Content is >70% HTML. Escalating to Gemini...")
             try:
                 result = await self.call_gemini_verdict(
@@ -197,7 +212,7 @@ class XLMRPredictor:
                 # Phase 2: HTML-heavy -> Gemini
                 # -------------------------
                 print(f"🔍 Checking HTML heaviness...{raw_html} and {is_mostly_html(raw_html,text)}")
-                if GEMINI_ENABLED and (raw_html or is_mostly_html(raw_html,text)):
+                if GEMINI_ENABLED and (is_mostly_html(raw_html,text)):
                     print(f"Item {i}: Escalating to Gemini due to {'raw_html' if raw_html else 'HTML heaviness'}")
                     gemini_indices.append(i)
                     gemini_payloads.append(raw_html)
