@@ -271,60 +271,6 @@ def get_parts_content(service, msg_id, payload):
     return parts_to_classify
 
 
-# def extract_all_uris(service, msg_id, payload):
-#     """
-#     Extracts all clickable/embedded URIs from the email body (HTML) 
-#     and from inside PDF attachments.
-#     """
-#     all_uris = set()
-#     url_regex = r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+'
-
-#     def walk_parts(parts):
-#         for part in parts:
-#             mime_type = part.get('mimeType')
-#             body = part.get('body', {})
-#             filename = part.get('filename', '')
-
-#             # SCAN HTML BODY
-#             if mime_type == 'text/html' and 'data' in body:
-#                 raw_html = base64.urlsafe_b64decode(body['data']).decode('utf-8', errors='ignore')
-#                 soup = BeautifulSoup(raw_html, 'html.parser')
-#                 for a in soup.find_all('a', href=True):
-#                     href = a['href']
-#                     if href.startswith('mailto:'):
-#                         continue
-#                     all_uris.add(href)
-#                 all_uris.update(re.findall(url_regex, raw_html))
-
-#             # SCAN PDF EMBEDDED LINKS
-#             elif filename.lower().endswith('.pdf') and 'attachmentId' in body:
-#                 try:
-#                     attachment = service.users().messages().attachments().get(
-#                         userId='me', messageId=msg_id, id=body['attachmentId']).execute()
-#                     pdf_data = base64.urlsafe_b64decode(attachment['data'])
-                    
-#                     with fitz.open(stream=io.BytesIO(pdf_data), filetype="pdf") as doc:
-#                         for page in doc:
-#                             for link in page.get_links():
-#                                 if 'uri' in link:
-#                                     all_uris.add(link['uri'])
-                            
-#                             all_uris.update(re.findall(url_regex, page.get_text()))
-#                 except Exception as e:
-#                     print(f"❌ Error scanning PDF {filename}: {e}")
-
-#             if 'parts' in part:
-#                 walk_parts(part['parts'])
-
-#     if 'parts' in payload:
-#         walk_parts(payload['parts'])
-#     elif 'body' in payload:
-#         walk_parts([payload])
-
-#     return list(all_uris)
-
-from urlextract import URLExtract
-
 def extract_all_uris(service, msg_id, payload):
     """
     Extracts strictly valid web URIs from HTML and PDFs.
@@ -615,9 +561,13 @@ async def background_shap_analysis(email: str, mid: str, text: str, current_data
                 current_data["triggers"] = triggers
                 
                 # Save back to Redis (overwriting the previous entry)
-                await db.setex(
+                # await db.setex(
+                #     f"explanation:{email}:{mid}", 
+                #     86400 * 7, 
+                #     json.dumps(current_data)
+                # )
+                await db.set(
                     f"explanation:{email}:{mid}", 
-                    86400 * 7, 
                     json.dumps(current_data)
                 )
                 print(f"✅ Background SHAP complete for {mid}. Found {len(triggers)} triggers.")
@@ -729,7 +679,7 @@ async def global_processing_worker():
                                 "triggers": findings_list, # << ClamAV/OLEVBA reasons saved here
                                 "confidence": 1.0
                             }
-                            await db.setex(f"explanation:{email}:{mid}", 86400 * 7, json.dumps(explanation_data))
+                            await db.set(f"explanation:{email}:{mid}", json.dumps(explanation_data))
                             
                             await db.lrem("task_in_progress", 1, item["raw"])
                             print(f"🚨 Moved malicious attachment email {mid} for {email}")
@@ -799,9 +749,13 @@ async def global_processing_worker():
                                     "triggers": res.get("triggers", []), 
                                 }
 
-                                await db.setex(
+                                # await db.setex(
+                                #     f"explanation:{email}:{mid}", 
+                                #     86400 * 7, 
+                                #     json.dumps(explanation_data)
+                                # )
+                                await db.set(
                                     f"explanation:{email}:{mid}", 
-                                    86400 * 7, 
                                     json.dumps(explanation_data)
                                 )
 
