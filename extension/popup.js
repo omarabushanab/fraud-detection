@@ -1,5 +1,5 @@
 // extension/popup.js
-const API_BASE_URL = "https://jonell-ardeid-interpervasively.ngrok-free.dev";
+const API_BASE_URL = "https://gus-hypertonic-otto.ngrok-free.dev";
 
 document.addEventListener('DOMContentLoaded', function() {
     const btn = document.getElementById('subscribeBtn');

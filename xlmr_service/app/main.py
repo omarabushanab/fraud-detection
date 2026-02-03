@@ -14,7 +14,7 @@ origins = [
     "http://localhost:8002",
     # Use your actual Extension ID from chrome://extensions
     "chrome-extension://ogdpbgagjdkapaokiggidfmbpmpfdgee", 
-    "https://jonell-ardeid-interpervasively.ngrok-free.dev"
+    "https://gus-hypertonic-otto.ngrok-free.dev"
 ]
 
 # 2. Add the middleware

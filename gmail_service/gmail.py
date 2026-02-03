@@ -44,7 +44,7 @@ if not credentials_raw:
 
 CLIENT_CONFIG = json.loads(credentials_raw)
 
-BASE_URL = os.getenv("BASE_URL", "https://jonell-ardeid-interpervasively.ngrok-free.dev")
+BASE_URL = os.getenv("BASE_URL", "https://gus-hypertonic-otto.ngrok-free.dev")
 REDIRECT_URI = f"{BASE_URL}/callback"
 # Updated to include identity scopes
 SCOPES = [

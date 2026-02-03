@@ -749,7 +749,7 @@ async function startSubscription() {
     
     try {
         // Step 1: Call your backend to get the Google Auth URL
-        const response = await fetch('https://jonell-ardeid-interpervasively.ngrok-free.dev/login');
+        const response = await fetch('https://gus-hypertonic-otto.ngrok-free.dev/login');
         const data = await response.json();
         
         if (data.auth_url) {
