@@ -193,14 +193,14 @@ def predict_url(url, api_key=os.getenv("SAFE_BROWSING_API_KEY"), threshold=0.72)
 def health_check():
     return {"status": "healthy"}
 
-test_url = input("Enter a URL to classify: ")
-result = predict_url(test_url)
+# test_url = input("Enter a URL to classify: ")
+# result = predict_url(test_url)
 
 @app.post("/classify_url")
 def classify_url(request: URLRequest):
     return predict_url(request.url)
 
-print("===== URI INFERENCE RESULT =====")
-print(result)
-print("================================")
+# print("===== URI INFERENCE RESULT =====")
+# print(result)
+# print("================================")
 
