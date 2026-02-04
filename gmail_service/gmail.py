@@ -1154,7 +1154,7 @@ async def proxy_analyze_full(req: EmailRequest):
             # Cache the result if we have message_id
             if req.message_id and req.user_email and result.get("label") == "phishing":
                 storage_key = f"explanation:{req.user_email}:{req.message_id}"
-                await db.setex(storage_key, 86400, json.dumps(result))
+                await db.set(storage_key, json.dumps(result))
             
             return result
             
