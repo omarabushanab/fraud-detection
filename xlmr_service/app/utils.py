@@ -45,29 +45,46 @@ def clean_html_for_llm(html_content):
 
 # xlmr_service/app/utils.py
 
+# def is_mostly_html(raw_content, plain_text_content, threshold=0.70):
+#     if not raw_content or not plain_text_content:
+#         return False
+        
+#     html_len = len(raw_content)
+#     text_len = len(plain_text_content)
+#     overhead = html_len - text_len
+    
+#     # ---------------------------------------------------------
+#     # CRITICAL FIX: Ignore standard Gmail wrappers (~800 chars)
+#     # If the email structure is smaller than 1,200 chars, 
+#     # it is too simple to need Gemini. Send it to XLM-R.
+#     # ---------------------------------------------------------
+#     if overhead < 1200: 
+#         print(f"📉 Low Overhead ({overhead} chars). Skipping Ratio Check.")
+#         return False
+
+#     if html_len == 0: 
+#         return False
+
+#     ratio = (html_len - text_len) / html_len
+    
+#     print(f"📊 Stats: HTML_Len={html_len}, Text_Len={text_len}, Overhead={overhead}")
+#     print(f"📊 Ratio: {ratio:.2f} (Threshold: {threshold})")
+    
+#     return ratio > threshold
+
 def is_mostly_html(raw_content, plain_text_content, threshold=0.70):
-    if not raw_content or not plain_text_content:
+    if not raw_content:
         return False
         
-    html_len = len(raw_content)
-    text_len = len(plain_text_content)
-    overhead = html_len - text_len
-    
-    # ---------------------------------------------------------
-    # CRITICAL FIX: Ignore standard Gmail wrappers (~800 chars)
-    # If the email structure is smaller than 1,200 chars, 
-    # it is too simple to need Gemini. Send it to XLM-R.
-    # ---------------------------------------------------------
-    if overhead < 1200: 
-        print(f"📉 Low Overhead ({overhead} chars). Skipping Ratio Check.")
-        return False
+    # Get truly clean human text (no long URLs or tags)
+    human_text = clean_html_for_llm(raw_content)
+    human_len = len(human_text)
+    total_len = len(raw_content)
 
-    if html_len == 0: 
-        return False
+    if total_len == 0: return False
 
-    ratio = (html_len - text_len) / html_len
+    # Ratio of "Code/Tags" to "Total File Size"
+    ratio = (total_len - human_len) / total_len
     
-    print(f"📊 Stats: HTML_Len={html_len}, Text_Len={text_len}, Overhead={overhead}")
-    print(f"📊 Ratio: {ratio:.2f} (Threshold: {threshold})")
-    
+    print(f"📊 New Ratio Logic: {ratio:.2f}")
     return ratio > threshold
