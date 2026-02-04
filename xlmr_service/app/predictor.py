@@ -40,7 +40,17 @@ class XLMRPredictor:
     def explain(self, text):
             """Extract SHAP-based triggers from text (Top 5 contributors)"""
             try:
-                shap_values = self.explainer([text])
+                # to ensure SHAP doesn't receive more than the model can handle.
+                encoded_input = self.tokenizer(
+                    text, 
+                    max_length=512, 
+                    truncation=True, 
+                    add_special_tokens=False
+                )
+                truncated_text = self.tokenizer.decode(encoded_input["input_ids"])
+            
+            # Pass the truncated text to SHAP
+                shap_values = self.explainer([truncated_text])
                 tokens = shap_values.data[0]
                 values = shap_values.values[0][:, 1]  # Contribution to 'Phishing' class
                 
